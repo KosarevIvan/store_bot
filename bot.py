@@ -139,6 +139,97 @@ async def unban_user(message: types.Message):
     except:
         await message.reply("❗ Неверный ID.")
 
+@dp.message_handler(lambda m: m.text == "📦 Фото со склада")
+async def show_photos(message: types.Message):
+    kb = InlineKeyboardMarkup()
+    for product in PHOTOS:
+        kb.add(InlineKeyboardButton(text=product, callback_data=f"photo:{product}"))
+    await message.answer("📸 Выберите товар для просмотра фото:", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data.startswith("photo:"))
+async def send_photo(call: types.CallbackQuery):
+    product = call.data.split(":")[1]
+    photo_path = PHOTOS.get(product)
+    if photo_path:
+        await call.message.answer_photo(InputFile(photo_path))
+    else:
+        await call.message.answer("⚠️ Фото не найдено.")
+    await call.answer()
+
+@dp.message_handler(lambda m: m.text == "🛒 Оформить заказ")
+async def start_order(message: types.Message):
+    kb = InlineKeyboardMarkup()
+    for product in PRODUCTS:
+        kb.add(InlineKeyboardButton(text=product, callback_data=f"order:{product}"))
+    await message.answer("Выберите товар:", reply_markup=kb)
+    await OrderState.waiting_for_product.set()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("order:"), state=OrderState.waiting_for_product)
+async def choose_quantity(call: types.CallbackQuery, state: FSMContext):
+    product = call.data.split(":")[1]
+    await state.update_data(product=product)
+    kb = InlineKeyboardMarkup()
+    for qty in PRODUCTS[product]:
+        kb.add(InlineKeyboardButton(text=f"{qty} г", callback_data=f"qty:{qty}"))
+    await call.message.answer("Выберите граммовку:", reply_markup=kb)
+    await OrderState.waiting_for_quantity.set()
+    await call.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("qty:"), state=OrderState.waiting_for_quantity)
+async def choose_quality(call: types.CallbackQuery, state: FSMContext):
+    quantity = int(call.data.split(":")[1])
+    await state.update_data(quantity=quantity)
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("Да, хочу улучшеное качество", callback_data="quality:yes"))
+    kb.add(InlineKeyboardButton("Нет, спасибо", callback_data="quality:no"))
+    await call.message.answer("Добавить улучшенное качество за +10%?", reply_markup=kb)
+    await OrderState.waiting_for_quality.set()
+    await call.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("quality:"), state=OrderState.waiting_for_quality)
+async def confirm_order(call: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    quality = call.data.split(":")[1] == "yes"
+    product, qty = data['product'], data['quantity']
+    price = PRODUCTS[product][qty]
+    if quality:
+        price = int(price * 1.1)
+    await state.update_data(quality=quality, price=price)
+    text = f"<b>Ваш заказ:</b>\nТовар: {product}\nГраммовка: {qty} г\nКачество: {'Улучшенное (+10%)' if quality else 'Стандартное'}\n\n<b>Итого: {price}₽</b>\n\nНажмите кнопку ниже, чтобы подтвердить заказ."
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("✅ Подтверждаю, оплатить", callback_data="confirm"))
+    kb.add(InlineKeyboardButton("🔄 Перевыбрать товар", callback_data="restart"))
+    await call.message.answer(text, reply_markup=kb)
+    await OrderState.confirming_order.set()
+    await call.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "confirm", state=OrderState.confirming_order)
+async def ask_comment(call: types.CallbackQuery, state: FSMContext):
+    await call.message.answer("📍 Уточните город и район для доставки. Например: Санкт-Петербург, Василеостровский район")
+    await OrderState.waiting_for_comment.set()
+    await call.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "restart", state="*")
+async def restart_order(call: types.CallbackQuery, state: FSMContext):
+    await state.finish()
+    await start_order(call.message)
+    await call.answer()
+
+@dp.message_handler(state=OrderState.waiting_for_comment)
+async def finish_order(message: types.Message, state: FSMContext):
+    comment = message.text.strip()
+    data = await state.get_data()
+    user_id = message.from_user.id
+    username = message.from_user.username
+    user_ref = f"@{username}" if username else f"ID: {user_id}"
+    order_text = f"🛒 Новый заказ от {user_ref} (ID: {user_id}):\n" \
+                 f"Товар: {data['product']}\nГраммовка: {data['quantity']} г\n" \
+                 f"Качество: {'Улучшенное' if data['quality'] else 'Стандартное'}\nЦена: {data['price']}₽\n\nКомментарий: {comment}"
+    if ADMIN_ID:
+        await bot.send_message(ADMIN_ID, order_text)
+    await message.answer("✅ Ваш заказ принят! Скоро с вами свяжутся. Спасибо за покупку!", reply_markup=main_kb)
+    await state.finish()
+
 @dp.message_handler(lambda m: m.text == "📩 Связаться с админом")
 async def contact_admin(message: types.Message):
     if message.from_user.id in banned_users:
@@ -147,6 +238,7 @@ async def contact_admin(message: types.Message):
     username_to_id[f"@{message.from_user.username}"] = message.from_user.id
     awaiting_admin_reply.add(message.from_user.id)
     await message.answer("📝 Напишите ваше сообщение для администратора:", reply_markup=back_kb)
+    await bot.send_message(ADMIN_ID, f"📩 Сообщение от @{message.from_user.username} (ID: {message.from_user.id}): \nСвязаться с админом")
 
 @dp.message_handler(content_types=['text', 'photo'])
 async def handle_message(message: types.Message):
@@ -170,10 +262,10 @@ async def handle_message(message: types.Message):
         if message.photo:
             photo = message.photo[-1]
             await bot.send_photo(ADMIN_ID, photo.file_id, caption=text)
-        elif message.text:
+        else:
             await bot.send_message(ADMIN_ID, f"{text}\n{message.text}")
         await message.answer("✅ Сообщение отправлено администратору. Ожидайте ответа.")
-        awaiting_admin_reply.remove(message.from_user.id)
+        awaiting_admin_reply.discard(message.from_user.id)
     else:
         await message.answer("Нажмите ⬅️ На главную или воспользуйтесь меню.")
 
