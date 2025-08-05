@@ -251,7 +251,7 @@ async def contact_admin(message: types.Message):
     username_to_id[f"@{message.from_user.username}"] = message.from_user.id
     awaiting_admin_reply.add(message.from_user.id)
     await message.answer("📝 Напишите ваше сообщение для администратора:", reply_markup=back_kb)
-    await bot.send_message(ADMIN_ID, f"📩 Сообщение от @{message.from_user.username} (ID: {message.from_user.id}): \nСвязаться с админом")
+    #await bot.send_message(ADMIN_ID, f"📩 Сообщение от @{message.from_user.username} (ID: {message.from_user.id}): \nСвязаться с админом")
 
 @dp.message_handler(content_types=['text', 'photo'])
 async def handle_message(message: types.Message):
