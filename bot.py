@@ -140,11 +140,12 @@ async def unban_user(message: types.Message):
         await message.reply("❗ Неверный ID.")
 
 @dp.message_handler(lambda m: m.text == "📦 Фото со склада")
-async def show_photos(message: types.Message):
+async def show_photos(message: types.Message, state: FSMContext):
     kb = InlineKeyboardMarkup()
     for product in PHOTOS:
         kb.add(InlineKeyboardButton(text=product, callback_data=f"photo:{product}"))
     await message.answer("📸 Выберите товар для просмотра фото:", reply_markup=kb)
+    await state.update_data(last_photo_id=None)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("photo:"))
 async def send_photo(call: types.CallbackQuery, state: FSMContext):
