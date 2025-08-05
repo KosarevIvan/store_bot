@@ -12,21 +12,20 @@ from datetime import datetime
 # Загрузка переменных окружения
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", 0))  # Telegram ID админа
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
 
-# --- Состояния --- #
 class OrderState(StatesGroup):
     waiting_for_product = State()
     waiting_for_quantity = State()
     waiting_for_quality = State()
     confirming_order = State()
+    waiting_for_comment = State()
 
-# --- Данные --- #
 PRODUCTS = {
     "Федя": {1: 2790, 2: 4790, 3: 7990},
     "Бобы": {1: 2190, 2: 2990, 3: 3990},
@@ -39,12 +38,10 @@ PHOTOS = {
     "Металл": "data/photos/metall.jpg",
 }
 
-# --- Кнопки --- #
 main_kb = ReplyKeyboardMarkup(resize_keyboard=True)
 main_kb.add("🛒 Оформить заказ")
 main_kb.add("📦 Фото со склада", "📩 Связаться с админом")
 
-# --- Вспомогательные функции --- #
 def get_time_stamp():
     now = datetime.now()
     rounded = now.replace(minute=0 if now.minute < 30 else 30, second=0, microsecond=0)
@@ -75,13 +72,14 @@ def format_welcome():
 
 Если вас интересуют другие вещества или граммовки — мы готовы обсудить индивидуальное предложение специально для Вас.
 
+📍 Сейчас сервис работает в: Санкт-Петербурге, Москве, Екатеринбурге, Владивостоке, Челябинске, Иркутске и Казани.
+
 📅 Актуализировано {get_time_stamp()}
 🔒 Все заказы перед доставкой проходят контроль качества.
 🚀 Доставка — быстрая и надёжная. Скорее всего, клад уже ждёт Вас в вашем районе.
 Ваш <b>Elysium One</b> — где сладости становятся эксклюзивом.
 """
 
-# --- Хэндлеры --- #
 @dp.message_handler(commands=['start'])
 async def start_handler(message: types.Message):
     await message.answer(format_welcome(), parse_mode='HTML', reply_markup=main_kb)
@@ -154,18 +152,23 @@ async def confirm_order(call: types.CallbackQuery, state: FSMContext):
 
 @dp.message_handler(lambda m: m.text.lower() == "подтверждаю", state=OrderState.confirming_order)
 async def finish_order(message: types.Message, state: FSMContext):
+    await message.answer("📍 Уточните город и район для доставки. Например: Москва, САО")
+    await OrderState.waiting_for_comment.set()
+
+@dp.message_handler(state=OrderState.waiting_for_comment)
+async def receive_comment(message: types.Message, state: FSMContext):
+    comment = message.text.strip()
     data = await state.get_data()
     user_id = message.from_user.id
     username = message.from_user.username
     user_ref = f"@{username}" if username else f"ID: {user_id}"
     order_text = f"🛒 Новый заказ от {user_ref} (ID: {user_id}):\n" \
-                 f"Товар: {data['product']}\nГраммовка: {data['quantity']} г\nКачество: {'Улучшенное' if data['quality'] else 'Стандартное'}\nЦена: {data['price']}₽"
+                 f"Товар: {data['product']}\nГраммовка: {data['quantity']} г\nКачество: {'Улучшенное' if data['quality'] else 'Стандартное'}\nЦена: {data['price']}₽\n\nКомментарий: {comment}"
     if ADMIN_ID:
         await bot.send_message(ADMIN_ID, order_text)
-    await message.answer("Ваш заказ принят! Скоро с вами свяжутся. Спасибо за покупку!", reply_markup=main_kb)
+    await message.answer("✅ Ваш заказ принят! Скоро с вами свяжутся. Спасибо за покупку!", reply_markup=main_kb)
     await state.finish()
 
-# Перехват обычных сообщений — для связи с админом
 @dp.message_handler()
 async def relay_to_admin(message: types.Message):
     if message.from_user.id == ADMIN_ID and message.text.startswith("/ответ"):
