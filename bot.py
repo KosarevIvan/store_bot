@@ -156,13 +156,15 @@ async def delete_user_messages(user_id: int):
     try:
         # Get all messages in chat
         messages = []
-        offset = 0
+        offset = None
         while True:
-            chunk = await bot.get_chat_history(chat_id=user_id, limit=100, offset=offset)
-            if not chunk:
+            updates = await bot.get_updates(offset=offset, limit=100, timeout=10)
+            if not updates:
                 break
-            messages.extend(chunk)
-            offset += len(chunk)
+            for update in updates:
+                if update.message and update.message.chat.id == user_id:
+                    messages.append(update.message)
+            offset = updates[-1].update_id + 1
 
         # Delete messages from bot
         for msg in messages:
@@ -348,29 +350,47 @@ async def reply_to_user(message: types.Message):
 
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3:
-        await message.reply("❗ Формат: /ответ @username сообщение")
+        await message.reply("❗ Формат: /ответ user_id сообщение")
         return
 
-    user_id = await resolve_user_id(parts[1])
-    if user_id:
-        try:
-            # Delete bot's "message sent" notification
-            history = await bot.get_chat_history(chat_id=user_id, limit=10)
-            for msg in history:
-                if msg.text == "✅ Сообщение отправлено администратору. Ожидайте ответа.":
-                    try:
-                        await bot.delete_message(chat_id=user_id, message_id=msg.message_id)
-                    except:
-                        pass
-                    break
+    try:
+        user_id = int(parts[1])
+    except ValueError:
+        await message.reply("❗ Некорректный ID пользователя")
+        return
 
-            await bot.send_message(user_id, f"📬 Ответ администратора:\n\n{parts[2]}")
-            await message.reply(f"✅ Ответ отправлен пользователю {parts[1]} ({user_id}).")
-            log_message(user_id, f"Ответ админа: {parts[2]}", is_admin=True)
-        except Exception as e:
-            await message.reply(f"❌ Ошибка: {str(e)}")
-    else:
-        await message.reply("❗ Пользователь не найден.")
+    reply_text = parts[2]
+    username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{message.from_user.id}"
+
+    try:
+        # Отправляем ответ пользователю
+        await bot.send_message(user_id, f"📬 Ответ администратора ({username}):\n\n{reply_text}")
+
+        # Удаляем уведомление "Сообщение отправлено" у пользователя
+        messages = []
+        offset = None
+        while True:
+            updates = await bot.get_updates(offset=offset, limit=100, timeout=10)
+            if not updates:
+                break
+            for update in updates:
+                if update.message and update.message.chat.id == user_id:
+                    messages.append(update.message)
+            offset = updates[-1].update_id + 1
+
+        for msg in messages:
+            if msg.text == "✅ Сообщение отправлено администратору. Ожидайте ответа.":
+                try:
+                    await bot.delete_message(user_id, msg.message_id)
+                except:
+                    pass
+                break
+
+        await message.reply(f"✅ Ответ отправлен пользователю ID: {user_id}")
+        log_message(user_id, f"Ответ админа ({username}): {reply_text}", is_admin=True)
+
+    except Exception as e:
+        await message.reply(f"❌ Ошибка: {str(e)}")
 
 
 @dp.message_handler(commands=['start'])
@@ -550,29 +570,47 @@ async def handle_messages(message: types.Message):
         if message.text and message.text.startswith("/ответ"):
             parts = message.text.split(maxsplit=2)
             if len(parts) < 3:
-                await message.reply("❗ Формат: /ответ @username сообщение")
+                await message.reply("❗ Формат: /ответ user_id сообщение")
                 return
 
-            user_id = await resolve_user_id(parts[1])
-            if user_id:
-                try:
-                    # Delete "message sent" notification
-                    history = await bot.get_chat_history(chat_id=user_id, limit=10)
-                    for msg in history:
-                        if msg.text == "✅ Сообщение отправлено администратору. Ожидайте ответа.":
-                            try:
-                                await bot.delete_message(chat_id=user_id, message_id=msg.message_id)
-                            except:
-                                pass
-                            break
+            try:
+                user_id = int(parts[1])
+            except ValueError:
+                await message.reply("❗ Некорректный ID пользователя")
+                return
 
-                    await bot.send_message(user_id, f"📬 Ответ администратора:\n\n{parts[2]}")
-                    await message.reply(f"✅ Ответ отправлен пользователю {parts[1]} ({user_id}).")
-                    log_message(user_id, f"Ответ админа: {parts[2]}", is_admin=True)
-                except Exception as e:
-                    await message.reply(f"❌ Ошибка: {str(e)}")
-            else:
-                await message.reply("❗ Пользователь не найден")
+            reply_text = parts[2]
+            username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{message.from_user.id}"
+
+            try:
+                # Отправляем ответ пользователю
+                await bot.send_message(user_id, f"📬 Ответ администратора ({username}):\n\n{reply_text}")
+
+                # Удаляем уведомление "Сообщение отправлено" у пользователя
+                messages = []
+                offset = None
+                while True:
+                    updates = await bot.get_updates(offset=offset, limit=100, timeout=10)
+                    if not updates:
+                        break
+                    for update in updates:
+                        if update.message and update.message.chat.id == user_id:
+                            messages.append(update.message)
+                    offset = updates[-1].update_id + 1
+
+                for msg in messages:
+                    if msg.text == "✅ Сообщение отправлено администратору. Ожидайте ответа.":
+                        try:
+                            await bot.delete_message(user_id, msg.message_id)
+                        except:
+                            pass
+                        break
+
+                await message.reply(f"✅ Ответ отправлен пользователю ID: {user_id}")
+                log_message(user_id, f"Ответ админа ({username}): {reply_text}", is_admin=True)
+
+            except Exception as e:
+                await message.reply(f"❌ Ошибка: {str(e)}")
             return
 
     if message.from_user.id in awaiting_admin_reply:
