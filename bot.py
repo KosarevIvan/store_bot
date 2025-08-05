@@ -8,6 +8,7 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from dotenv import load_dotenv
 from datetime import datetime
+import pytz
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -16,10 +17,12 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
 logging.basicConfig(level=logging.INFO)
 
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=BOT_TOKEN, parse_mode='HTML')
 dp = Dispatcher(bot, storage=MemoryStorage())
 
 banned_users = set()
+user_contacting_admin = {}
+awaiting_admin_reply = set()
 
 class OrderState(StatesGroup):
     waiting_for_product = State()
@@ -45,7 +48,8 @@ main_kb.add("🛒 Оформить заказ")
 main_kb.add("📦 Фото со склада", "📩 Связаться с админом")
 
 def get_time_stamp():
-    now = datetime.now()
+    msk_tz = pytz.timezone("Europe/Moscow")
+    now = datetime.now(msk_tz)
     rounded = now.replace(minute=0 if now.minute < 30 else 30, second=0, microsecond=0)
     return rounded.strftime("%d.%m.%Y в %H:%M")
 
@@ -76,7 +80,7 @@ def format_welcome():
 
 📍 Сейчас сервис работает в: Санкт-Петербурге, Москве, Екатеринбурге, Владивостоке, Челябинске, Иркутске и Казани.
 
-📅 Актуализировано {get_time_stamp()}
+📅 Актуализировано {get_time_stamp()} (по МСК)
 🔒 Все заказы перед доставкой проходят контроль качества.
 🚀 Доставка — быстрая и надёжная. Скорее всего, клад уже ждёт Вас в вашем районе.
 Ваш <b>Elysium One</b> — где сладости становятся эксклюзивом.
@@ -112,11 +116,31 @@ async def unban_user(message: types.Message):
     except ValueError:
         await message.reply("❗ Неверный ID пользователя.")
 
+@dp.message_handler(commands=['ответ'])
+async def reply_to_user(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        parts = message.text.split(maxsplit=2)
+        if len(parts) < 3:
+            await message.reply("❗ Используйте формат: /ответ @username сообщение")
+            return
+        username = parts[1].lstrip('@')
+        text = parts[2]
+        for uid, uname in user_contacting_admin.items():
+            if uname == username:
+                await bot.send_message(uid, f"📩 Ответ от администратора:\n{text}")
+                await message.reply("✅ Сообщение отправлено.")
+                return
+        await message.reply("❗ Пользователь не найден или не писал администратору.")
+    except Exception as e:
+        await message.reply(f"Ошибка: {e}")
+
 @dp.message_handler(commands=['start'])
 async def start_handler(message: types.Message):
     if message.from_user.id in banned_users:
         return
-    await message.answer(format_welcome(), parse_mode='HTML', reply_markup=main_kb)
+    await message.answer(format_welcome(), reply_markup=main_kb)
 
 @dp.message_handler(lambda m: m.text == "📦 Фото со склада")
 async def photos_handler(message: types.Message, state: FSMContext):
@@ -146,87 +170,23 @@ async def send_photo(call: types.CallbackQuery, state: FSMContext):
         await call.message.answer("Фото не найдено.")
     await call.answer()
 
-@dp.callback_query_handler(lambda c: c.data.startswith("order:"), state=OrderState.waiting_for_product)
-async def choose_quantity(call: types.CallbackQuery, state: FSMContext):
-    product = call.data.split(":")[1]
-    await state.update_data(product=product)
-    kb = InlineKeyboardMarkup()
-    for qty in PRODUCTS[product]:
-        kb.add(InlineKeyboardButton(f"{qty} г", callback_data=f"qty:{qty}"))
-    await call.message.answer("Выберите граммовку:", reply_markup=kb)
-    await OrderState.waiting_for_quantity.set()
-    await call.answer()
-
-@dp.callback_query_handler(lambda c: c.data.startswith("qty:"), state=OrderState.waiting_for_quantity)
-async def choose_quality(call: types.CallbackQuery, state: FSMContext):
-    qty = int(call.data.split(":")[1])
-    await state.update_data(quantity=qty)
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("✅ Да, улучшить качество (+10%)", callback_data="quality:yes"))
-    kb.add(InlineKeyboardButton("❌ Нет, оставить как есть", callback_data="quality:no"))
-    await call.message.answer("Добавить улучшенное качество за +10%?", reply_markup=kb)
-    await OrderState.waiting_for_quality.set()
-    await call.answer()
-
-@dp.callback_query_handler(lambda c: c.data.startswith("quality:"), state=OrderState.waiting_for_quality)
-async def confirm_order(call: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    quality = call.data.split(":")[1] == "yes"
-    product, qty = data['product'], data['quantity']
-    price = PRODUCTS[product][qty]
-    if quality:
-        price = int(price * 1.1)
-
-    text = f"<b>Ваш заказ:</b>\nТовар: {product}\nГраммовка: {qty} г\nКачество: {'Улучшенное (+10%)' if quality else 'Стандартное'}\n\n<b>Итого: {price}₽</b>\n\nДля оформления заказа напишите 'Подтверждаю'."
-    await state.update_data(price=price, quality=quality)
-    await call.message.answer(text, parse_mode='HTML')
-    await OrderState.confirming_order.set()
-    await call.answer()
-
-@dp.message_handler(lambda m: m.text.lower() == "подтверждаю", state=OrderState.confirming_order)
-async def finish_order(message: types.Message, state: FSMContext):
-    await message.answer("📍 Уточните город и район для доставки. Например: Санкт-Петербург, Василеостровский район")
-    await OrderState.waiting_for_comment.set()
-
-@dp.message_handler(state=OrderState.waiting_for_comment)
-async def receive_comment(message: types.Message, state: FSMContext):
-    comment = message.text.strip()
-    data = await state.get_data()
-    user_id = message.from_user.id
-    username = message.from_user.username
-    user_ref = f"@{username}" if username else f"ID: {user_id}"
-    order_text = f"🛒 Новый заказ от {user_ref} (ID: {user_id}):\n" \
-                 f"Товар: {data['product']}\nГраммовка: {data['quantity']} г\nКачество: {'Улучшенное' if data['quality'] else 'Стандартное'}\nЦена: {data['price']}₽\n\nКомментарий: {comment}"
-    if ADMIN_ID:
-        await bot.send_message(ADMIN_ID, order_text)
-    await message.answer("✅ Ваш заказ принят! Скоро с вами свяжутся. Спасибо за покупку!", reply_markup=main_kb)
-    await state.finish()
+@dp.message_handler(lambda m: m.text == "📩 Связаться с админом")
+async def contact_admin(message: types.Message):
+    if message.from_user.id in banned_users:
+        return
+    user_contacting_admin[message.from_user.id] = message.from_user.username or f"id{message.from_user.id}"
+    awaiting_admin_reply.add(message.from_user.id)
+    await message.answer("✏️ Напишите ваше сообщение администратору:")
 
 @dp.message_handler()
-async def relay_to_admin(message: types.Message):
-    if message.from_user.id == ADMIN_ID and message.text.startswith("/ответ"):
-        parts = message.text.split(' ', 2)
-        if len(parts) < 3:
-            await message.reply("❗ Формат: /ответ user_id сообщение")
-            return
-        target = parts[1]
-        response = parts[2]
-
-        if target.startswith("@"):  # ответ по username не поддерживается Telegram API
-            await message.reply("❌ Нельзя отправить сообщение только по username. Используй user_id.")
-            return
-
-        try:
-            await bot.send_message(target, f"📬 Сообщение от администратора:\n\n{response}")
-            await message.reply("✅ Ответ отправлен пользователю.")
-        except Exception as e:
-            await message.reply(f"❌ Ошибка отправки: {e}")
-    else:
-        username = message.from_user.username
-        user_ref = f"@{username}" if username else f"ID: {message.from_user.id}"
-        if ADMIN_ID:
-            await bot.send_message(ADMIN_ID, f"📩 Сообщение от {user_ref} (ID: {message.from_user.id}): {message.text}")
-            await message.answer("Ваше сообщение передано администратору. Он свяжется с вами в ближайшее время.")
-
-if __name__ == '__main__':
-    executor.start_polling(dp, skip_updates=True)
+async def handle_admin_message(message: types.Message):
+    if message.from_user.id in banned_users:
+        return
+    if message.from_user.id not in awaiting_admin_reply:
+        return  # не пересылаем обычные сообщения
+    username = message.from_user.username or f"id{message.from_user.id}"
+    user_contacting_admin[message.from_user.id] = username
+    msg = f"📩 Сообщение от @{username} (ID: {message.from_user.id}):\n{message.text}"
+    await bot.send_message(ADMIN_ID, msg)
+    await message.answer("Ваше сообщение передано администратору. Он свяжется с вами в ближайшее время.")
+    awaiting_admin_reply.discard(message.from_user.id)
