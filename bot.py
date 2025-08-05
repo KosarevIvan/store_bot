@@ -25,10 +25,11 @@ dp = Dispatcher(bot, storage=MemoryStorage())
 # Data structures
 banned_users = set()
 user_contacting_admin = {}
-username_to_id = {}
+username_to_id = {}  # username: user_id
 awaiting_admin_reply = set()
 user_orders = {}
 chat_logs = {}
+message_ids = {}  # user_id: [message_ids]
 
 # Create directories
 os.makedirs('chat_logs', exist_ok=True)
@@ -154,37 +155,28 @@ def load_chat_logs(user_id: int):
 async def delete_user_messages(user_id: int):
     """Delete all messages from bot to user"""
     try:
-        # Get all messages in chat
-        messages = []
-        offset = None
-        while True:
-            updates = await bot.get_updates(offset=offset, limit=100, timeout=10)
-            if not updates:
-                break
-            for update in updates:
-                if update.message and update.message.chat.id == user_id:
-                    messages.append(update.message)
-            offset = updates[-1].update_id + 1
-
-        # Delete messages from bot
-        for msg in messages:
-            if msg.from_user.id == int(BOT_TOKEN.split(':')[0]):
+        if user_id in message_ids:
+            for msg_id in message_ids[user_id]:
                 try:
-                    await bot.delete_message(chat_id=user_id, message_id=msg.message_id)
+                    await bot.delete_message(chat_id=user_id, message_id=msg_id)
                 except Exception as e:
-                    logging.error(f"Error deleting message {msg.message_id}: {e}")
+                    logging.error(f"Error deleting message {msg_id}: {e}")
+            message_ids[user_id] = []
     except Exception as e:
-        logging.error(f"Error getting chat history: {e}")
+        logging.error(f"Error deleting messages: {e}")
 
 
-async def resolve_user_id(target: str) -> int:
-    """Resolve user ID from username or ID string"""
+async def resolve_user(target: str):
+    """Resolve user by username or ID"""
     if target.startswith("@"):
-        return username_to_id.get(target)
+        user_id = username_to_id.get(target)
+        if not user_id:
+            return None, "Пользователь с таким username не найден"
+        return user_id, None
     try:
-        return int(target)
+        return int(target), None
     except ValueError:
-        return None
+        return None, "Некорректный ID пользователя"
 
 
 @dp.message_handler(commands=['фото'])
@@ -216,15 +208,16 @@ async def ban_user(message: types.Message):
 
     parts = message.text.split()
     if len(parts) != 2:
-        await message.reply("❗ Формат: /ban user_id или /ban @username")
+        await message.reply("❗ Формат: /ban @username или /ban user_id")
         return
 
-    user_id = await resolve_user_id(parts[1])
-    if user_id:
-        banned_users.add(user_id)
-        await message.reply(f"🚫 Пользователь {parts[1]} ({user_id}) заблокирован.")
-    else:
-        await message.reply("❗ Пользователь не найден.")
+    user_id, error = await resolve_user(parts[1])
+    if error:
+        await message.reply(f"❗ {error}")
+        return
+
+    banned_users.add(user_id)
+    await message.reply(f"🚫 Пользователь {parts[1]} ({user_id}) заблокирован.")
     log_message(message.from_user.id, f"/ban {parts[1]}", is_admin=True)
 
 
@@ -235,15 +228,16 @@ async def unban_user(message: types.Message):
 
     parts = message.text.split()
     if len(parts) != 2:
-        await message.reply("❗ Формат: /unban user_id или /unban @username")
+        await message.reply("❗ Формат: /unban @username или /unban user_id")
         return
 
-    user_id = await resolve_user_id(parts[1])
-    if user_id:
-        banned_users.discard(user_id)
-        await message.reply(f"✅ Пользователь {parts[1]} ({user_id}) разблокирован.")
-    else:
-        await message.reply("❗ Пользователь не найден.")
+    user_id, error = await resolve_user(parts[1])
+    if error:
+        await message.reply(f"❗ {error}")
+        return
+
+    banned_users.discard(user_id)
+    await message.reply(f"✅ Пользователь {parts[1]} ({user_id}) разблокирован.")
     log_message(message.from_user.id, f"/unban {parts[1]}", is_admin=True)
 
 
@@ -257,23 +251,25 @@ async def clear_chat(message: types.Message):
         await message.reply("❗ Формат: /очистить @username или /очистить user_id")
         return
 
-    user_id = await resolve_user_id(parts[1])
-    if user_id:
-        try:
-            # Clear logs
-            chat_logs[user_id] = []
-            filename = f"chat_logs/user_{user_id}.txt"
-            if os.path.exists(filename):
-                os.remove(filename)
+    user_id, error = await resolve_user(parts[1])
+    if error:
+        await message.reply(f"❗ {error}")
+        return
 
-            # Delete all messages in chat
-            await delete_user_messages(user_id)
+    try:
+        # Clear logs
+        chat_logs[user_id] = []
+        filename = f"chat_logs/user_{user_id}.txt"
+        if os.path.exists(filename):
+            os.remove(filename)
 
-            await message.reply(f"✅ Чат с пользователем {parts[1]} ({user_id}) полностью очищен.")
-        except Exception as e:
-            await message.reply(f"❌ Ошибка: {str(e)}")
-    else:
-        await message.reply("❗ Пользователь не найден.")
+        # Delete all messages from bot
+        await delete_user_messages(user_id)
+
+        await message.reply(f"✅ Чат с пользователем {parts[1]} ({user_id}) полностью очищен.")
+    except Exception as e:
+        await message.reply(f"❌ Ошибка: {str(e)}")
+
     log_message(message.from_user.id, f"/очистить {parts[1]}", is_admin=True)
 
 
@@ -287,17 +283,19 @@ async def view_chat_history(message: types.Message):
         await message.reply("❗ Формат: /история @username или /история user_id")
         return
 
-    user_id = await resolve_user_id(parts[1])
-    if user_id:
-        history = load_chat_logs(user_id)
-        if history:
-            chunks = [history[i:i + 20] for i in range(0, len(history), 20)]
-            for chunk in chunks:
-                await message.answer("\n".join(chunk))
-        else:
-            await message.reply(f"История переписки с {parts[1]} ({user_id}) пуста.")
+    user_id, error = await resolve_user(parts[1])
+    if error:
+        await message.reply(f"❗ {error}")
+        return
+
+    history = load_chat_logs(user_id)
+    if history:
+        chunks = [history[i:i + 20] for i in range(0, len(history), 20)]
+        for chunk in chunks:
+            await message.answer("\n".join(chunk))
     else:
-        await message.reply("❗ Пользователь не найден.")
+        await message.reply(f"История переписки с {parts[1]} ({user_id}) пуста.")
+
     log_message(message.from_user.id, f"/история {parts[1]}", is_admin=True)
 
 
@@ -311,12 +309,18 @@ async def send_payment(message: types.Message):
         await message.reply("❗ Формат: /оплата @username ссылка_на_оплату")
         return
 
-    user_id = await resolve_user_id(parts[1])
-    if user_id:
-        order_data = user_orders.get(user_id)
-        if order_data:
-            username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{message.from_user.id}"
-            payment_msg = f"""💳 Подтверждение оплаты заказа
+    user_id, error = await resolve_user(parts[1])
+    if error:
+        await message.reply(f"❗ {error}")
+        return
+
+    order_data = user_orders.get(user_id)
+    if not order_data:
+        await message.reply(f"❗ У пользователя {parts[1]} ({user_id}) нет активного заказа.")
+        return
+
+    username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{message.from_user.id}"
+    payment_msg = f"""💳 Подтверждение оплаты заказа
 
 Здравствуйте!
 Ваш заказ принят:
@@ -331,15 +335,15 @@ async def send_payment(message: types.Message):
 
 После оплаты пришлите скриншот."""
 
-            try:
-                await bot.send_message(user_id, payment_msg)
-                await message.reply(f"✅ Сообщение об оплате отправлено пользователю {parts[1]} ({user_id})")
-            except Exception as e:
-                await message.reply(f"❌ Ошибка: {str(e)}")
-        else:
-            await message.reply(f"❗ У пользователя {parts[1]} ({user_id}) нет активного заказа.")
-    else:
-        await message.reply("❗ Пользователь не найден.")
+    try:
+        await bot.send_message(user_id, payment_msg)
+        await message.reply(f"✅ Сообщение об оплате отправлено пользователю {parts[1]} ({user_id})")
+    except Exception as e:
+        error_msg = f"❌ Ошибка: {str(e)}"
+        if "bot was blocked by the user" in str(e).lower():
+            error_msg = "❌ Пользователь заблокировал бота"
+        await message.reply(error_msg)
+
     log_message(message.from_user.id, f"/оплата {parts[1]}", is_admin=True)
 
 
@@ -350,53 +354,49 @@ async def reply_to_user(message: types.Message):
 
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3:
-        await message.reply("❗ Формат: /ответ user_id сообщение")
+        await message.reply("❗ Формат: /ответ @username сообщение ИЛИ /ответ user_id сообщение")
         return
 
-    try:
-        user_id = int(parts[1])
-    except ValueError:
-        await message.reply("❗ Некорректный ID пользователя")
-        return
-
+    target = parts[1]
     reply_text = parts[2]
-    username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{message.from_user.id}"
+    admin_username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{message.from_user.id}"
+
+    user_id, error = await resolve_user(target)
+    if error:
+        await message.reply(f"❗ {error}")
+        return
 
     try:
         # Отправляем ответ пользователю
-        await bot.send_message(user_id, f"📬 Ответ администратора ({username}):\n\n{reply_text}")
+        sent_msg = await bot.send_message(
+            user_id,
+            f"📬 Ответ администратора ({admin_username}):\n\n{reply_text}"
+        )
 
-        # Удаляем уведомление "Сообщение отправлено" у пользователя
-        messages = []
-        offset = None
-        while True:
-            updates = await bot.get_updates(offset=offset, limit=100, timeout=10)
-            if not updates:
-                break
-            for update in updates:
-                if update.message and update.message.chat.id == user_id:
-                    messages.append(update.message)
-            offset = updates[-1].update_id + 1
+        # Сохраняем ID сообщения для возможного удаления
+        if user_id not in message_ids:
+            message_ids[user_id] = []
+        message_ids[user_id].append(sent_msg.message_id)
 
-        for msg in messages:
-            if msg.text == "✅ Сообщение отправлено администратору. Ожидайте ответа.":
-                try:
-                    await bot.delete_message(user_id, msg.message_id)
-                except:
-                    pass
-                break
-
-        await message.reply(f"✅ Ответ отправлен пользователю ID: {user_id}")
-        log_message(user_id, f"Ответ админа ({username}): {reply_text}", is_admin=True)
+        await message.reply(f"✅ Ответ отправлен пользователю {target} ({user_id})")
+        log_message(user_id, f"Ответ админа ({admin_username}): {reply_text}", is_admin=True)
 
     except Exception as e:
-        await message.reply(f"❌ Ошибка: {str(e)}")
+        error_msg = f"❌ Ошибка: {str(e)}"
+        if "bot was blocked by the user" in str(e).lower():
+            error_msg = "❌ Пользователь заблокировал бота"
+        await message.reply(error_msg)
 
 
 @dp.message_handler(commands=['start'])
 async def start_handler(message: types.Message):
     if message.from_user.id in banned_users:
         return
+
+    # Сохраняем username пользователя
+    if message.from_user.username:
+        username_to_id[f"@{message.from_user.username}"] = message.from_user.id
+
     log_message(message.from_user.id, "/start")
     await message.answer(format_welcome(), reply_markup=main_kb)
 
@@ -556,8 +556,11 @@ async def contact_admin(message: types.Message):
     user_id = message.from_user.id
     username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{user_id}"
 
+    # Сохраняем username пользователя
+    if message.from_user.username:
+        username_to_id[f"@{message.from_user.username}"] = user_id
+
     user_contacting_admin[user_id] = username
-    username_to_id[f"@{message.from_user.username}"] = user_id
     awaiting_admin_reply.add(user_id)
 
     await message.answer("Напишите ваше сообщение администратору:", reply_markup=back_kb)
@@ -567,55 +570,16 @@ async def contact_admin(message: types.Message):
 @dp.message_handler(content_types=types.ContentTypes.ANY)
 async def handle_messages(message: types.Message):
     if message.from_user.id == ADMIN_ID:
-        if message.text and message.text.startswith("/ответ"):
-            parts = message.text.split(maxsplit=2)
-            if len(parts) < 3:
-                await message.reply("❗ Формат: /ответ user_id сообщение")
-                return
-
-            try:
-                user_id = int(parts[1])
-            except ValueError:
-                await message.reply("❗ Некорректный ID пользователя")
-                return
-
-            reply_text = parts[2]
-            username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{message.from_user.id}"
-
-            try:
-                # Отправляем ответ пользователю
-                await bot.send_message(user_id, f"📬 Ответ администратора ({username}):\n\n{reply_text}")
-
-                # Удаляем уведомление "Сообщение отправлено" у пользователя
-                messages = []
-                offset = None
-                while True:
-                    updates = await bot.get_updates(offset=offset, limit=100, timeout=10)
-                    if not updates:
-                        break
-                    for update in updates:
-                        if update.message and update.message.chat.id == user_id:
-                            messages.append(update.message)
-                    offset = updates[-1].update_id + 1
-
-                for msg in messages:
-                    if msg.text == "✅ Сообщение отправлено администратору. Ожидайте ответа.":
-                        try:
-                            await bot.delete_message(user_id, msg.message_id)
-                        except:
-                            pass
-                        break
-
-                await message.reply(f"✅ Ответ отправлен пользователю ID: {user_id}")
-                log_message(user_id, f"Ответ админа ({username}): {reply_text}", is_admin=True)
-
-            except Exception as e:
-                await message.reply(f"❌ Ошибка: {str(e)}")
-            return
+        return
 
     if message.from_user.id in awaiting_admin_reply:
         user_id = message.from_user.id
         username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{user_id}"
+
+        # Сохраняем ID сообщения для возможного удаления
+        if user_id not in message_ids:
+            message_ids[user_id] = []
+        message_ids[user_id].append(message.message_id)
 
         if message.photo:
             photo = message.photo[-1]
@@ -625,7 +589,7 @@ async def handle_messages(message: types.Message):
             if message.caption:
                 caption += f"\n\n{message.caption}"
 
-            await bot.send_photo(
+            sent_msg = await bot.send_photo(
                 ADMIN_ID,
                 photo.file_id,
                 caption=caption
@@ -634,7 +598,7 @@ async def handle_messages(message: types.Message):
             if message.caption:
                 log_message(user_id, message.caption)
         elif message.text:
-            await bot.send_message(
+            sent_msg = await bot.send_message(
                 ADMIN_ID,
                 f"📩 Сообщение от {username} ({user_id}):\n{message.text}"
             )
@@ -643,7 +607,12 @@ async def handle_messages(message: types.Message):
             await message.answer("❌ Поддерживаются только текст и фото")
             return
 
-        await message.answer("✅ Сообщение отправлено администратору. Ожидайте ответа.")
+        # Сохраняем ID сообщения "отправлено админу"
+        sent_notification = await message.answer("✅ Сообщение отправлено администратору. Ожидайте ответа.")
+        if user_id not in message_ids:
+            message_ids[user_id] = []
+        message_ids[user_id].append(sent_notification.message_id)
+
         awaiting_admin_reply.discard(user_id)
     else:
         await message.answer("Используйте кнопки меню для навигации.", reply_markup=main_kb)
