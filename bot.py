@@ -166,7 +166,9 @@ async def finish_order(message: types.Message, state: FSMContext):
 @dp.message_handler()
 async def relay_to_admin(message: types.Message):
     if ADMIN_ID:
-        await bot.send_message(ADMIN_ID, f"Сообщение от @{message.from_user.username or message.from_user.id}: {message.text}")
+        username = message.from_user.username
+        user_ref = f"@{username}" if username else f"ID: {message.from_user.id}"
+        await bot.send_message(ADMIN_ID, f"Сообщение от {user_ref}: {message.text}")
         await message.answer("Ваше сообщение передано администратору. Он свяжется с вами в ближайшее время.")
 
 if __name__ == '__main__':
