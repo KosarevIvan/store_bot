@@ -155,7 +155,10 @@ async def confirm_order(call: types.CallbackQuery, state: FSMContext):
 @dp.message_handler(lambda m: m.text.lower() == "подтверждаю", state=OrderState.confirming_order)
 async def finish_order(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    order_text = f"🛒 Новый заказ от @{message.from_user.username or message.from_user.id}:\n" \
+    user_id = message.from_user.id
+    username = message.from_user.username
+    user_ref = f"@{username}" if username else f"ID: {user_id}"
+    order_text = f"🛒 Новый заказ от {user_ref} (ID: {user_id}):\n" \
                  f"Товар: {data['product']}\nГраммовка: {data['quantity']} г\nКачество: {'Улучшенное' if data['quality'] else 'Стандартное'}\nЦена: {data['price']}₽"
     if ADMIN_ID:
         await bot.send_message(ADMIN_ID, order_text)
@@ -165,11 +168,29 @@ async def finish_order(message: types.Message, state: FSMContext):
 # Перехват обычных сообщений — для связи с админом
 @dp.message_handler()
 async def relay_to_admin(message: types.Message):
-    if ADMIN_ID:
+    if message.from_user.id == ADMIN_ID and message.text.startswith("/ответ"):
+        parts = message.text.split(' ', 2)
+        if len(parts) < 3:
+            await message.reply("❗ Формат: /ответ user_id сообщение")
+            return
+        target = parts[1]
+        response = parts[2]
+
+        if target.startswith("@"):  # ответ по username не поддерживается Telegram API
+            await message.reply("❌ Нельзя отправить сообщение только по username. Используй user_id.")
+            return
+
+        try:
+            await bot.send_message(target, f"📬 Сообщение от администратора:\n\n{response}")
+            await message.reply("✅ Ответ отправлен пользователю.")
+        except Exception as e:
+            await message.reply(f"❌ Ошибка отправки: {e}")
+    else:
         username = message.from_user.username
         user_ref = f"@{username}" if username else f"ID: {message.from_user.id}"
-        await bot.send_message(ADMIN_ID, f"Сообщение от {user_ref}: {message.text}")
-        await message.answer("Ваше сообщение передано администратору. Он свяжется с вами в ближайшее время.")
+        if ADMIN_ID:
+            await bot.send_message(ADMIN_ID, f"📩 Сообщение от {user_ref} (ID: {message.from_user.id}): {message.text}")
+            await message.answer("Ваше сообщение передано администратору. Он свяжется с вами в ближайшее время.")
 
 if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True)
