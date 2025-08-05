@@ -167,5 +167,5 @@ async def finalize_order(message: types.Message, state: FSMContext):
     await state.finish()
 
 if __name__ == '__main__':
-    from aiogram import executor
+    print("🚀 Бот запускается...")
     executor.start_polling(dp, skip_updates=True)
