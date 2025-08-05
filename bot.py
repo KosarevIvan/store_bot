@@ -190,3 +190,6 @@ async def handle_admin_message(message: types.Message):
     await bot.send_message(ADMIN_ID, msg)
     await message.answer("Ваше сообщение передано администратору. Он свяжется с вами в ближайшее время.")
     awaiting_admin_reply.discard(message.from_user.id)
+
+if __name__ == '__main__':
+    executor.start_polling(dp, skip_updates=True)
