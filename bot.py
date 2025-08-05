@@ -19,6 +19,8 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
 
+banned_users = set()
+
 class OrderState(StatesGroup):
     waiting_for_product = State()
     waiting_for_quantity = State()
@@ -80,35 +82,66 @@ def format_welcome():
 Ваш <b>Elysium One</b> — где сладости становятся эксклюзивом.
 """
 
+@dp.message_handler(commands=['ban'])
+async def ban_user(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    parts = message.text.split()
+    if len(parts) != 2:
+        await message.reply("❗ Формат: /ban user_id")
+        return
+    try:
+        uid = int(parts[1])
+        banned_users.add(uid)
+        await message.reply(f"🚫 Пользователь {uid} заблокирован.")
+    except ValueError:
+        await message.reply("❗ Неверный ID пользователя.")
+
+@dp.message_handler(commands=['unban'])
+async def unban_user(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    parts = message.text.split()
+    if len(parts) != 2:
+        await message.reply("❗ Формат: /unban user_id")
+        return
+    try:
+        uid = int(parts[1])
+        banned_users.discard(uid)
+        await message.reply(f"✅ Пользователь {uid} разблокирован.")
+    except ValueError:
+        await message.reply("❗ Неверный ID пользователя.")
+
 @dp.message_handler(commands=['start'])
 async def start_handler(message: types.Message):
+    if message.from_user.id in banned_users:
+        return
     await message.answer(format_welcome(), parse_mode='HTML', reply_markup=main_kb)
 
 @dp.message_handler(lambda m: m.text == "📦 Фото со склада")
-async def photos_handler(message: types.Message):
+async def photos_handler(message: types.Message, state: FSMContext):
     kb = InlineKeyboardMarkup()
     for name in PRODUCTS:
         kb.add(InlineKeyboardButton(name, callback_data=f"photo:{name}"))
     await message.answer("Выберите товар:", reply_markup=kb)
-
-@dp.message_handler(lambda m: m.text == "📩 Связаться с админом")
-async def contact_admin(message: types.Message):
-    await message.answer("Введите ваше сообщение, мы передадим его администратору.")
-
-@dp.message_handler(lambda m: m.text == "🛒 Оформить заказ")
-async def order_start(message: types.Message):
-    kb = InlineKeyboardMarkup()
-    for name in PRODUCTS:
-        kb.add(InlineKeyboardButton(name, callback_data=f"order:{name}"))
-    await message.answer("Выберите товар:", reply_markup=kb)
-    await OrderState.waiting_for_product.set()
+    await state.update_data(last_photo=None)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("photo:"))
-async def send_photo(call: types.CallbackQuery):
+async def send_photo(call: types.CallbackQuery, state: FSMContext):
     product = call.data.split(":")[1]
     photo_path = PHOTOS.get(product)
+
+    data = await state.get_data()
+    last_photo_id = data.get("last_photo")
+    if last_photo_id:
+        try:
+            await bot.delete_message(call.message.chat.id, last_photo_id)
+        except:
+            pass
+
     if photo_path:
-        await call.message.answer_photo(InputFile(photo_path))
+        sent = await call.message.answer_photo(InputFile(photo_path))
+        await state.update_data(last_photo=sent.message_id)
     else:
         await call.message.answer("Фото не найдено.")
     await call.answer()
@@ -152,7 +185,7 @@ async def confirm_order(call: types.CallbackQuery, state: FSMContext):
 
 @dp.message_handler(lambda m: m.text.lower() == "подтверждаю", state=OrderState.confirming_order)
 async def finish_order(message: types.Message, state: FSMContext):
-    await message.answer("📍 Уточните город и район для доставки. Например: Москва, САО")
+    await message.answer("📍 Уточните город и район для доставки. Например: Санкт-Петербург, Василеостровский район")
     await OrderState.waiting_for_comment.set()
 
 @dp.message_handler(state=OrderState.waiting_for_comment)
