@@ -147,11 +147,23 @@ async def show_photos(message: types.Message):
     await message.answer("📸 Выберите товар для просмотра фото:", reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith("photo:"))
-async def send_photo(call: types.CallbackQuery):
+async def send_photo(call: types.CallbackQuery, state: FSMContext):
     product = call.data.split(":")[1]
     photo_path = PHOTOS.get(product)
+
+    data = await state.get_data()
+    last_photo_id = data.get("last_photo")
+
+    # Удаляем предыдущее фото, если есть
+    if last_photo_id:
+        try:
+            await bot.delete_message(call.message.chat.id, last_photo_id)
+        except:
+            pass
+
     if photo_path:
-        await call.message.answer_photo(InputFile(photo_path))
+        sent = await call.message.answer_photo(InputFile(photo_path))
+        await state.update_data(last_photo=sent.message_id)
     else:
         await call.message.answer("⚠️ Фото не найдено.")
     await call.answer()
