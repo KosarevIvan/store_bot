@@ -147,7 +147,6 @@ async def contact_admin(message: types.Message):
     username_to_id[f"@{message.from_user.username}"] = message.from_user.id
     awaiting_admin_reply.add(message.from_user.id)
     await message.answer("📝 Напишите ваше сообщение для администратора:", reply_markup=back_kb)
-    await bot.send_message(ADMIN_ID, f"📩 Сообщение от @{message.from_user.username} (ID: {message.from_user.id}): \nСвязаться с админом")
 
 @dp.message_handler(content_types=['text', 'photo'])
 async def handle_message(message: types.Message):
@@ -171,9 +170,10 @@ async def handle_message(message: types.Message):
         if message.photo:
             photo = message.photo[-1]
             await bot.send_photo(ADMIN_ID, photo.file_id, caption=text)
-        else:
+        elif message.text:
             await bot.send_message(ADMIN_ID, f"{text}\n{message.text}")
         await message.answer("✅ Сообщение отправлено администратору. Ожидайте ответа.")
+        awaiting_admin_reply.remove(message.from_user.id)
     else:
         await message.answer("Нажмите ⬅️ На главную или воспользуйтесь меню.")
 
