@@ -65,11 +65,45 @@ back_kb = ReplyKeyboardMarkup(resize_keyboard=True)
 back_kb.add("⬅️ На главную")
 
 
-# Helper functions
+def format_welcome():
+    return f"""
+Добро пожаловать в наш магазин Elysium One — где каждый грамм удовольствия становится искусством.
+🍬 Наш актуальный ассортимент премиальных веществ:
+
+<b>Федя</b>
+1г — 2 790₽
+2г — 4 790₽ (выгода 15%)
+3г — 7 990₽ (самое выгодное предложение)
+
+<b>Бобы</b>
+1г — 2 190₽
+2г — 2 990₽ (📉 выгода 32%!)
+3г — 3 990₽ (🎁 лучший выбор)
+
+<b>Металл</b>
+1г — 1 490₽
+2г — 2 490₽ (💰 выгода 17%)
+3г — 3 490₽ (🚀 топ-предложение)
+
+🎯 <b>Специальное предложение:</b>
+Вы можете приобрести товар высшего качества, добавив всего 10% к стоимости заказа.
+
+Если вас интересуют другие вещества или граммовки — мы готовы обсудить индивидуальное предложение специально для Вас.
+
+📍 Сейчас сервис работает в: Санкт-Петербурге, Москве, Екатеринбурге, Владивостоке, Челябинске, Иркутске и Казани.
+
+📅 Актуализировано {get_time_stamp()} (по МСК)
+🔒 Все заказы перед доставкой проходят контроль качества.
+🚀 Доставка — быстрая и надёжная. Скорее всего, клад уже ждёт Вас в вашем районе.
+Ваш <b>Elysium One</b> — где сладости становятся эксклюзивом.
+"""
+
+
 def get_time_stamp():
     msk_tz = pytz.timezone("Europe/Moscow")
     now = datetime.now(msk_tz)
-    return now.strftime("%d.%m.%y %H:%M:%S")
+    rounded = now.replace(minute=0 if now.minute < 30 else 30, second=0, microsecond=0)
+    return rounded.strftime("%d.%m.%Y в %H:%M")
 
 
 async def save_photo(photo: types.PhotoSize, user_id: int) -> str:
@@ -86,7 +120,7 @@ def log_message(user_id: int, message: str, is_admin: bool = False, is_photo: bo
     if user_id not in chat_logs:
         chat_logs[user_id] = []
 
-    timestamp = get_time_stamp()
+    timestamp = datetime.now().strftime("%d.%m.%y %H:%M:%S")
     username = "admin" if is_admin else f"{username_to_id.get(f'@{user_id}', 'user')}({user_id})"
 
     if is_photo:
@@ -120,11 +154,25 @@ def load_chat_logs(user_id: int):
 async def delete_user_messages(user_id: int):
     """Delete all messages from bot to user"""
     try:
-        async for msg in bot.iter_history(user_id, limit=100):
+        # Get all messages in chat
+        messages = []
+        offset = 0
+        while True:
+            chunk = await bot.get_chat_history(chat_id=user_id, limit=100, offset=offset)
+            if not chunk:
+                break
+            messages.extend(chunk)
+            offset += len(chunk)
+
+        # Delete messages from bot
+        for msg in messages:
             if msg.from_user.id == int(BOT_TOKEN.split(':')[0]):
-                await bot.delete_message(user_id, msg.message_id)
+                try:
+                    await bot.delete_message(chat_id=user_id, message_id=msg.message_id)
+                except Exception as e:
+                    logging.error(f"Error deleting message {msg.message_id}: {e}")
     except Exception as e:
-        logging.error(f"Error deleting messages: {e}")
+        logging.error(f"Error getting chat history: {e}")
 
 
 async def resolve_user_id(target: str) -> int:
@@ -137,7 +185,6 @@ async def resolve_user_id(target: str) -> int:
         return None
 
 
-# New command to send photo from logs
 @dp.message_handler(commands=['фото'])
 async def send_photo_from_logs(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -160,7 +207,6 @@ async def send_photo_from_logs(message: types.Message):
         await message.reply("❗ Фото не найдено. Проверьте ID.")
 
 
-# Admin commands
 @dp.message_handler(commands=['ban'])
 async def ban_user(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -174,7 +220,7 @@ async def ban_user(message: types.Message):
     user_id = await resolve_user_id(parts[1])
     if user_id:
         banned_users.add(user_id)
-        await message.reply(f"🚫 Пользователь {parts[1]} заблокирован.")
+        await message.reply(f"🚫 Пользователь {parts[1]} ({user_id}) заблокирован.")
     else:
         await message.reply("❗ Пользователь не найден.")
     log_message(message.from_user.id, f"/ban {parts[1]}", is_admin=True)
@@ -193,7 +239,7 @@ async def unban_user(message: types.Message):
     user_id = await resolve_user_id(parts[1])
     if user_id:
         banned_users.discard(user_id)
-        await message.reply(f"✅ Пользователь {parts[1]} разблокирован.")
+        await message.reply(f"✅ Пользователь {parts[1]} ({user_id}) разблокирован.")
     else:
         await message.reply("❗ Пользователь не найден.")
     log_message(message.from_user.id, f"/unban {parts[1]}", is_admin=True)
@@ -218,10 +264,10 @@ async def clear_chat(message: types.Message):
             if os.path.exists(filename):
                 os.remove(filename)
 
-            # Delete user messages
+            # Delete all messages in chat
             await delete_user_messages(user_id)
 
-            await message.reply(f"✅ Чат с пользователем {parts[1]} полностью очищен.")
+            await message.reply(f"✅ Чат с пользователем {parts[1]} ({user_id}) полностью очищен.")
         except Exception as e:
             await message.reply(f"❌ Ошибка: {str(e)}")
     else:
@@ -247,7 +293,7 @@ async def view_chat_history(message: types.Message):
             for chunk in chunks:
                 await message.answer("\n".join(chunk))
         else:
-            await message.reply("История переписки пуста.")
+            await message.reply(f"История переписки с {parts[1]} ({user_id}) пуста.")
     else:
         await message.reply("❗ Пользователь не найден.")
     log_message(message.from_user.id, f"/история {parts[1]}", is_admin=True)
@@ -267,6 +313,7 @@ async def send_payment(message: types.Message):
     if user_id:
         order_data = user_orders.get(user_id)
         if order_data:
+            username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{message.from_user.id}"
             payment_msg = f"""💳 Подтверждение оплаты заказа
 
 Здравствуйте!
@@ -284,11 +331,11 @@ async def send_payment(message: types.Message):
 
             try:
                 await bot.send_message(user_id, payment_msg)
-                await message.reply(f"✅ Сообщение об оплате отправлено пользователю {parts[1]}")
+                await message.reply(f"✅ Сообщение об оплате отправлено пользователю {parts[1]} ({user_id})")
             except Exception as e:
                 await message.reply(f"❌ Ошибка: {str(e)}")
         else:
-            await message.reply("❗ У пользователя нет активного заказа.")
+            await message.reply(f"❗ У пользователя {parts[1]} ({user_id}) нет активного заказа.")
     else:
         await message.reply("❗ Пользователь не найден.")
     log_message(message.from_user.id, f"/оплата {parts[1]}", is_admin=True)
@@ -308,13 +355,17 @@ async def reply_to_user(message: types.Message):
     if user_id:
         try:
             # Delete bot's "message sent" notification
-            async for msg in bot.iter_history(user_id, limit=10):
+            history = await bot.get_chat_history(chat_id=user_id, limit=10)
+            for msg in history:
                 if msg.text == "✅ Сообщение отправлено администратору. Ожидайте ответа.":
-                    await bot.delete_message(user_id, msg.message_id)
+                    try:
+                        await bot.delete_message(chat_id=user_id, message_id=msg.message_id)
+                    except:
+                        pass
                     break
 
             await bot.send_message(user_id, f"📬 Ответ администратора:\n\n{parts[2]}")
-            await message.reply("✅ Ответ отправлен.")
+            await message.reply(f"✅ Ответ отправлен пользователю {parts[1]} ({user_id}).")
             log_message(user_id, f"Ответ админа: {parts[2]}", is_admin=True)
         except Exception as e:
             await message.reply(f"❌ Ошибка: {str(e)}")
@@ -327,13 +378,13 @@ async def start_handler(message: types.Message):
     if message.from_user.id in banned_users:
         return
     log_message(message.from_user.id, "/start")
-    await message.answer("Добро пожаловать в магазин!", reply_markup=main_kb)
+    await message.answer(format_welcome(), reply_markup=main_kb)
 
 
 @dp.message_handler(lambda m: m.text == "⬅️ На главную")
 async def back_to_main(message: types.Message):
     log_message(message.from_user.id, "На главную")
-    await message.answer("Главное меню:", reply_markup=main_kb)
+    await message.answer(format_welcome(), reply_markup=main_kb)
 
 
 @dp.message_handler(lambda m: m.text == "📦 Фото со склада")
@@ -352,17 +403,17 @@ async def send_product_photo(call: types.CallbackQuery, state: FSMContext):
     photo_path = PHOTOS.get(product)
 
     data = await state.get_data()
-    last_photo_id = data.get("last_photo")
+    last_photo_id = data.get("last_photo_id")
 
     if last_photo_id:
         try:
-            await bot.delete_message(call.message.chat.id, last_photo_id)
+            await bot.delete_message(chat_id=call.message.chat.id, message_id=last_photo_id)
         except:
             pass
 
     if photo_path:
         sent = await call.message.answer_photo(InputFile(photo_path))
-        await state.update_data(last_photo=sent.message_id)
+        await state.update_data(last_photo_id=sent.message_id)
     else:
         await call.message.answer("Фото не найдено")
     await call.answer()
@@ -443,9 +494,10 @@ async def process_confirmation(call: types.CallbackQuery, state: FSMContext):
 async def process_comment(message: types.Message, state: FSMContext):
     comment = message.text
     data = await state.get_data()
+    user_id = message.from_user.id
+    username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{user_id}"
 
     # Save order
-    user_id = message.from_user.id
     user_orders[user_id] = {
         'product': data['product'],
         'quantity': data['quantity'],
@@ -457,8 +509,7 @@ async def process_comment(message: types.Message, state: FSMContext):
 
     # Notify admin
     if ADMIN_ID:
-        order_text = f"""🛒 Новый заказ!
-Пользователь: @{message.from_user.username or message.from_user.id}
+        order_text = f"""🛒 Новый заказ от {username} ({user_id}):
 Товар: {data['product']} {data['quantity']} г
 Качество: {"улучшенное" if data['quality'] else "стандартное"}
 Цена: {data['price']}₽
@@ -482,63 +533,82 @@ async def contact_admin(message: types.Message):
     if message.from_user.id in banned_users:
         return
 
-    user_contacting_admin[message.from_user.id] = message.from_user.username or ""
-    username_to_id[f"@{message.from_user.username}"] = message.from_user.id
-    awaiting_admin_reply.add(message.from_user.id)
+    user_id = message.from_user.id
+    username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{user_id}"
+
+    user_contacting_admin[user_id] = username
+    username_to_id[f"@{message.from_user.username}"] = user_id
+    awaiting_admin_reply.add(user_id)
 
     await message.answer("Напишите ваше сообщение администратору:", reply_markup=back_kb)
-    log_message(message.from_user.id, "Запрос связи с админом")
+    log_message(user_id, "Запрос связи с админом")
 
 
-@dp.message_handler(content_types=['text', 'photo'])
+@dp.message_handler(content_types=types.ContentTypes.ANY)
 async def handle_messages(message: types.Message):
     if message.from_user.id == ADMIN_ID:
-        # Handle admin replies
         if message.text and message.text.startswith("/ответ"):
             parts = message.text.split(maxsplit=2)
             if len(parts) < 3:
-                await message.reply("Используйте: /ответ @username сообщение")
+                await message.reply("❗ Формат: /ответ @username сообщение")
                 return
 
             user_id = await resolve_user_id(parts[1])
             if user_id:
                 try:
                     # Delete "message sent" notification
-                    async for msg in bot.iter_history(user_id, limit=10):
+                    history = await bot.get_chat_history(chat_id=user_id, limit=10)
+                    for msg in history:
                         if msg.text == "✅ Сообщение отправлено администратору. Ожидайте ответа.":
-                            await bot.delete_message(user_id, msg.message_id)
+                            try:
+                                await bot.delete_message(chat_id=user_id, message_id=msg.message_id)
+                            except:
+                                pass
                             break
 
                     await bot.send_message(user_id, f"📬 Ответ администратора:\n\n{parts[2]}")
-                    await message.reply("✅ Ответ отправлен.")
+                    await message.reply(f"✅ Ответ отправлен пользователю {parts[1]} ({user_id}).")
                     log_message(user_id, f"Ответ админа: {parts[2]}", is_admin=True)
                 except Exception as e:
-                    await message.reply(f"Ошибка: {str(e)}")
+                    await message.reply(f"❌ Ошибка: {str(e)}")
             else:
-                await message.reply("Пользователь не найден")
+                await message.reply("❗ Пользователь не найден")
             return
 
     if message.from_user.id in awaiting_admin_reply:
+        user_id = message.from_user.id
+        username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{user_id}"
+
         if message.photo:
             photo = message.photo[-1]
-            photo_name = await save_photo(photo, message.from_user.id)
+            photo_name = await save_photo(photo, user_id)
+
+            caption = f"📸 Фото от {username} ({user_id})"
+            if message.caption:
+                caption += f"\n\n{message.caption}"
+
             await bot.send_photo(
                 ADMIN_ID,
                 photo.file_id,
-                caption=f"📸 Фото от @{message.from_user.username or message.from_user.id}"
+                caption=caption
             )
-            log_message(message.from_user.id, photo_name, is_photo=True)
-        else:
+            log_message(user_id, photo_name, is_photo=True)
+            if message.caption:
+                log_message(user_id, message.caption)
+        elif message.text:
             await bot.send_message(
                 ADMIN_ID,
-                f"📩 Сообщение от @{message.from_user.username or message.from_user.id}:\n{message.text}"
+                f"📩 Сообщение от {username} ({user_id}):\n{message.text}"
             )
-            log_message(message.from_user.id, message.text)
+            log_message(user_id, message.text)
+        else:
+            await message.answer("❌ Поддерживаются только текст и фото")
+            return
 
         await message.answer("✅ Сообщение отправлено администратору. Ожидайте ответа.")
-        awaiting_admin_reply.discard(message.from_user.id)
+        awaiting_admin_reply.discard(user_id)
     else:
-        await message.answer("Используйте кнопки меню", reply_markup=main_kb)
+        await message.answer("Используйте кнопки меню для навигации.", reply_markup=main_kb)
 
 
 if __name__ == '__main__':
