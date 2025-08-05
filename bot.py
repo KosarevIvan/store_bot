@@ -21,7 +21,8 @@ bot = Bot(token=BOT_TOKEN, parse_mode='HTML')
 dp = Dispatcher(bot, storage=MemoryStorage())
 
 banned_users = set()
-user_contacting_admin = {}
+user_contacting_admin = {}  # user_id: username
+username_to_id = {}  # username: user_id
 awaiting_admin_reply = set()
 
 class OrderState(StatesGroup):
@@ -120,21 +121,33 @@ async def unban_user(message: types.Message):
 async def reply_to_user(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    try:
-        parts = message.text.split(maxsplit=2)
-        if len(parts) < 3:
-            await message.reply("❗ Используйте формат: /ответ @username сообщение")
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        await message.reply("❗ Формат: /ответ user_id_or_username сообщение")
+        return
+
+    identifier = parts[1]
+    text = parts[2]
+
+    # Поиск по username
+    if identifier.startswith("@"):
+        username = identifier.lstrip("@")
+        user_id = username_to_id.get(username)
+        if not user_id:
+            await message.reply("❗ Пользователь с таким username не найден или не писал администратору.")
             return
-        username = parts[1].lstrip('@')
-        text = parts[2]
-        for uid, uname in user_contacting_admin.items():
-            if uname == username:
-                await bot.send_message(uid, f"📩 Ответ от администратора:\n{text}")
-                await message.reply("✅ Сообщение отправлено.")
-                return
-        await message.reply("❗ Пользователь не найден или не писал администратору.")
+    else:
+        try:
+            user_id = int(identifier)
+        except ValueError:
+            await message.reply("❗ ID должен быть числом.")
+            return
+
+    try:
+        await bot.send_message(user_id, f"📬 Сообщение от администратора:\n\n{text}")
+        await message.reply("✅ Ответ отправлен пользователю.")
     except Exception as e:
-        await message.reply(f"Ошибка: {e}")
+        await message.reply(f"❌ Ошибка при отправке: {e}")
 
 @dp.message_handler(commands=['start'])
 async def start_handler(message: types.Message):
@@ -174,7 +187,9 @@ async def send_photo(call: types.CallbackQuery, state: FSMContext):
 async def contact_admin(message: types.Message):
     if message.from_user.id in banned_users:
         return
-    user_contacting_admin[message.from_user.id] = message.from_user.username or f"id{message.from_user.id}"
+    username = message.from_user.username or f"id{message.from_user.id}"
+    user_contacting_admin[message.from_user.id] = username
+    username_to_id[username] = message.from_user.id
     awaiting_admin_reply.add(message.from_user.id)
     await message.answer("✏️ Напишите ваше сообщение администратору:")
 
@@ -183,13 +198,15 @@ async def handle_admin_message(message: types.Message):
     if message.from_user.id in banned_users:
         return
     if message.from_user.id not in awaiting_admin_reply:
-        return  # не пересылаем обычные сообщения
+        return
     username = message.from_user.username or f"id{message.from_user.id}"
     user_contacting_admin[message.from_user.id] = username
+    username_to_id[username] = message.from_user.id
     msg = f"📩 Сообщение от @{username} (ID: {message.from_user.id}):\n{message.text}"
     await bot.send_message(ADMIN_ID, msg)
     await message.answer("Ваше сообщение передано администратору. Он свяжется с вами в ближайшее время.")
     awaiting_admin_reply.discard(message.from_user.id)
 
 if __name__ == '__main__':
+    from aiogram import executor
     executor.start_polling(dp, skip_updates=True)
