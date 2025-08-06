@@ -125,6 +125,10 @@ def log_message(user_id: int, message: str, is_admin: bool = False, is_photo: bo
     timestamp = datetime.now().strftime("%d.%m.%y %H:%M:%S")
     username = "admin" if is_admin else f"{username_to_id.get(f'@{user_id}', 'user')}({user_id})"
 
+    # Не логируем фото от админа
+    if is_admin and is_photo:
+        return
+
     if is_photo:
         log_entry = f"{timestamp} @{username}: [фото_{message}]"
     else:
@@ -424,6 +428,45 @@ async def reply_to_user(message: types.Message):
         error_msg = f"❌ Ошибка: {str(e)}"
         if "bot was blocked by the user" in str(e).lower():
             error_msg = "❌ Пользователь заблокировал бота"
+        await message.reply(error_msg)
+
+
+@dp.message_handler(content_types=types.ContentTypes.PHOTO)
+async def handle_admin_photo(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    # Получаем последнего пользователя, которому нужно ответить
+    if not unanswered_clients:
+        await message.reply("Нет неотвеченных клиентов для отправки фото.")
+        return
+
+    user_id = next(iter(unanswered_clients))
+    username = username_to_id.get(f"@{user_id}", f"ID:{user_id}")
+
+    try:
+        # Отправляем фото пользователю
+        sent_photo = await bot.send_photo(
+            user_id,
+            message.photo[-1].file_id,
+            caption=message.caption if message.caption else None
+        )
+
+        # Сохраняем ID сообщения для возможного удаления
+        if user_id not in message_ids:
+            message_ids[user_id] = []
+        message_ids[user_id].append(sent_photo.message_id)
+
+        # Удаляем пользователя из списка неотвеченных
+        update_unanswered_clients(user_id, is_admin_reply=True)
+
+        await message.reply(f"✅ Фото отправлено пользователю {username} ({user_id})")
+
+    except Exception as e:
+        error_msg = f"❌ Ошибка: {str(e)}"
+        if "bot was blocked by the user" in str(e).lower():
+            error_msg = "❌ Пользователь заблокировал бота"
+            unanswered_clients.discard(user_id)
         await message.reply(error_msg)
 
 
