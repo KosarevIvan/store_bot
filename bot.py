@@ -241,6 +241,12 @@ async def start_handler(message: types.Message):
         username_to_id[f"@{message.from_user.username}"] = message.from_user.id
 
     log_message(message.from_user.id, "/start")
+
+    # Для администратора - особый случай
+    if message.from_user.id == ADMIN_ID:
+        await message.answer("🔐 Администраторский доступ активирован", reply_markup=main_kb)
+        return
+
     await message.answer("🔒 Для начала работы примите правила использования данного телеграм-бота",
                          reply_markup=rules_kb)
     await RulesState.waiting_for_accept.set()
