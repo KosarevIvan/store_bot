@@ -9,7 +9,6 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 from dotenv import load_dotenv
 from datetime import datetime
 import pytz
-import json
 import os.path
 import uuid
 
@@ -392,15 +391,21 @@ async def reply_to_user(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    # Разбиваем сообщение на части
-    parts = message.text.split() if message.text else message.caption.split() if message.caption else []
+    # Определяем target (username/id) из текста или подписи к фото
+    if message.text:
+        parts = message.text.split(maxsplit=2)
+    elif message.caption:
+        parts = message.caption.split(maxsplit=2)
+    else:
+        await message.reply("❗ Некорректный формат сообщения")
+        return
 
     if len(parts) < 2:
-        await message.reply("❗ Формат: /ответ @username или /ответ user_id [текст]")
+        await message.reply("❗ Формат: /ответ @username текст ИЛИ /ответ user_id текст")
         return
 
     target = parts[1]
-    reply_text = ' '.join(parts[2:]) if len(parts) > 2 else None
+    reply_text = parts[2] if len(parts) > 2 else None
     admin_username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{message.from_user.id}"
 
     user_id, error = await resolve_user(target)
@@ -409,16 +414,16 @@ async def reply_to_user(message: types.Message):
         return
 
     try:
-        # Отправляем контент пользователю
+        # Если есть фото
         if message.photo:
-            # Отправка фото с подписью или без
+            # Отправляем фото с текстом (если есть)
             sent_msg = await bot.send_photo(
                 user_id,
                 message.photo[-1].file_id,
                 caption=f"📬 Ответ администратора ({admin_username}):\n\n{reply_text}" if reply_text else None
             )
+        # Если нет фото, но есть текст
         elif reply_text:
-            # Отправка только текста
             sent_msg = await bot.send_message(
                 user_id,
                 f"📬 Ответ администратора ({admin_username}):\n\n{reply_text}"
@@ -427,17 +432,17 @@ async def reply_to_user(message: types.Message):
             await message.reply("❗ Нет контента для отправки (текст или фото)")
             return
 
-        # Сохраняем ID сообщения для возможного удаления
+        # Сохраняем ID сообщения
         if user_id not in message_ids:
             message_ids[user_id] = []
         message_ids[user_id].append(sent_msg.message_id)
 
-        # Удаляем пользователя из списка неотвеченных
+        # Удаляем из списка неотвеченных
         update_unanswered_clients(user_id, is_admin_reply=True)
 
         await message.reply(f"✅ Ответ отправлен пользователю {target} ({user_id})")
 
-        # Логируем только текстовые ответы админа
+        # Логируем только текстовые ответы
         if reply_text:
             log_message(user_id, f"Ответ админа ({admin_username}): {reply_text}", is_admin=True)
 
