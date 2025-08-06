@@ -44,6 +44,10 @@ class OrderState(StatesGroup):
     waiting_for_comment = State()
 
 
+class RulesState(StatesGroup):
+    waiting_for_accept = State()
+
+
 # Products and photos configuration
 PRODUCTS = {
     "Федя": {1: 2790, 2: 4790, 3: 7990},
@@ -57,6 +61,41 @@ PHOTOS = {
     "Металл": "data/photos/metall.jpg",
 }
 
+# Rules text
+RULES_TEXT = """
+📜 <b>Правила использования телеграм-бота @ElysiumOneBot</b>
+
+1. <b>Пользователь</b> - лицо, запустившее бота @ElysiumOneBot через команду /start или любую другую команду для продолжения использования.
+
+2. Продолжая использование бота @ElysiumOneBot, пользователь принимает все последующие правила безоговорочно.
+
+3. Данный телеграм-бот @ElysiumOneBot создан исключительно для тестирования функционала и возможностей Telegram API.
+
+4. Совершая перевод денежных средств по ссылкам, отправленным пользователю в этом телеграм-боте @ElysiumOneBot, пользователь совершает добровольное пожертвование на личные нужды Администрации @ElysiumOneBot без каких-либо обязательств со стороны Администрации.
+
+5. Весь контент (включая фотографии, тексты, описания), отправляемый в чате с @ElysiumOneBot со стороны администрации, является сгенерированным нейросетью или вымышленным. Любые совпадения с реальностью случайны и непреднамеренны.
+
+6. Администрация @ElysiumOneBot сохраняет за собой право вести логирование активности пользователя для внутренних целей без передачи третьим лицам.
+
+7. Переходя по любым ссылкам, отправленным телеграм-ботом @ElysiumOneBot, пользователь принимает всю ответственность за свои действия исключительно на себя.
+
+8. Администрация телеграм-бота @ElysiumOneBot не несёт ответственности за любую активность пользователя.
+
+9. Все сообщения, отправленные Администрацией телеграм-бота @ElysiumOneBot, являются вымышленными.
+
+10. Администрация оставляет за собой право блокировать доступ к боту без объяснения причин.
+
+11. Все товары, упомянутые в боте, являются вымыслом. Реальная возможность приобретения отсутствует.
+
+12. Пользователь соглашается с тем, что любые действия совершаются им на свой собственный риск.
+
+13. Администрация не гарантирует бесперебойную работу бота.
+
+14. Использование бота означает полное согласие со всеми пунктами правил.
+
+15. Администрация оставляет за собой право изменять правила в любое время.
+"""
+
 # Keyboards
 main_kb = ReplyKeyboardMarkup(resize_keyboard=True)
 main_kb.add("🛒 Оформить заказ")
@@ -64,6 +103,10 @@ main_kb.add("📦 Фото со склада", "📩 Связаться с ад�
 
 back_kb = ReplyKeyboardMarkup(resize_keyboard=True)
 back_kb.add("⬅️ На главную")
+
+rules_kb = ReplyKeyboardMarkup(resize_keyboard=True)
+rules_kb.add(KeyboardButton("✅ Принимаю"))
+rules_kb.add(KeyboardButton("📄 Правила использования"))
 
 
 def format_welcome():
@@ -108,7 +151,6 @@ def get_time_stamp():
 
 
 async def save_photo(photo: types.PhotoSize, user_id: int) -> str:
-    """Save photo to disk and return filename"""
     file_ext = photo.file_unique_id[-4:]
     filename = f"{user_id}_{uuid.uuid4().hex[:8]}_{file_ext}.jpg"
     file_path = f"chat_logs/photos/{filename}"
@@ -117,11 +159,9 @@ async def save_photo(photo: types.PhotoSize, user_id: int) -> str:
 
 
 def log_message(user_id: int, message: str, is_admin: bool = False, is_photo: bool = False):
-    """Log message to chat history"""
     if user_id not in chat_logs:
         chat_logs[user_id] = []
 
-    # Не логируем фото от админа
     if is_admin and is_photo:
         return
 
@@ -135,7 +175,6 @@ def log_message(user_id: int, message: str, is_admin: bool = False, is_photo: bo
 
     chat_logs[user_id].append(log_entry)
 
-    # Save to file
     filename = f"chat_logs/user_{user_id}.txt"
     try:
         with open(filename, 'a', encoding='utf-8') as f:
@@ -145,7 +184,6 @@ def log_message(user_id: int, message: str, is_admin: bool = False, is_photo: bo
 
 
 def load_chat_logs(user_id: int):
-    """Load chat history from file"""
     filename = f"chat_logs/user_{user_id}.txt"
     if os.path.exists(filename):
         try:
@@ -157,7 +195,6 @@ def load_chat_logs(user_id: int):
 
 
 async def delete_user_messages(user_id: int):
-    """Delete all messages from bot to user"""
     try:
         if user_id in message_ids:
             for msg_id in message_ids[user_id]:
@@ -171,7 +208,6 @@ async def delete_user_messages(user_id: int):
 
 
 async def resolve_user(target: str):
-    """Resolve user by username or ID"""
     if target.startswith("@"):
         user_id = username_to_id.get(target)
         if not user_id:
@@ -184,20 +220,42 @@ async def resolve_user(target: str):
 
 
 async def check_banned(user_id: int):
-    """Check if user is banned and respond if needed"""
     if user_id in banned_users:
         return True
     return False
 
 
 def update_unanswered_clients(user_id: int, is_admin_reply: bool = False):
-    """Update list of unanswered clients"""
     if is_admin_reply:
-        # Если это ответ админа, удаляем пользователя из списка неотвеченных
         unanswered_clients.discard(user_id)
     else:
-        # Если это сообщение от пользователя, добавляем его в список неотвеченных
         unanswered_clients.add(user_id)
+
+
+@dp.message_handler(commands=['start'])
+async def start_handler(message: types.Message):
+    if await check_banned(message.from_user.id):
+        return
+
+    if message.from_user.username:
+        username_to_id[f"@{message.from_user.username}"] = message.from_user.id
+
+    log_message(message.from_user.id, "/start")
+    await message.answer("🔒 Для начала работы примите правила использования данного телеграм-бота",
+                         reply_markup=rules_kb)
+    await RulesState.waiting_for_accept.set()
+
+
+@dp.message_handler(lambda m: m.text == "📄 Правила использования", state="*")
+async def show_rules(message: types.Message):
+    await message.answer(RULES_TEXT, parse_mode='HTML')
+
+
+@dp.message_handler(lambda m: m.text == "✅ Принимаю", state=RulesState.waiting_for_accept)
+async def accept_rules(message: types.Message, state: FSMContext):
+    log_message(message.from_user.id, "Принял правила")
+    await state.finish()
+    await message.answer(format_welcome(), reply_markup=main_kb)
 
 
 @dp.message_handler(commands=['клиенты'])
@@ -296,13 +354,11 @@ async def clear_chat(message: types.Message):
         return
 
     try:
-        # Clear logs
         chat_logs[user_id] = []
         filename = f"chat_logs/user_{user_id}.txt"
         if os.path.exists(filename):
             os.remove(filename)
 
-        # Delete all messages from bot
         await delete_user_messages(user_id)
 
         await message.reply(f"✅ Чат с пользователем {parts[1]} ({user_id}) полностью очищен.")
@@ -391,7 +447,6 @@ async def reply_to_user(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    # Определяем target (username/id) из текста или подписи к фото
     if message.text:
         parts = message.text.split(maxsplit=2)
     elif message.caption:
@@ -413,21 +468,16 @@ async def reply_to_user(message: types.Message):
         return
 
     try:
-        # Формируем текст ответа с пометкой администратора
         admin_reply_prefix = "📬 Ответ администратора:\n\n"
 
-        # Если есть фото
         if message.photo:
-            # Отправляем фото с текстом (если есть)
             photo_caption = admin_reply_prefix + (reply_text if reply_text else "[фото]")
             sent_msg = await bot.send_photo(
                 user_id,
                 message.photo[-1].file_id,
                 caption=photo_caption
             )
-            # Отправляем подтверждение админу
             await message.reply(f"✅ Фото отправлено пользователю {target} ({user_id})")
-        # Если нет фото, но есть текст
         elif reply_text:
             sent_msg = await bot.send_message(
                 user_id,
@@ -438,15 +488,12 @@ async def reply_to_user(message: types.Message):
             await message.reply("❗ Нет контента для отправки (текст или фото)")
             return
 
-        # Сохраняем ID сообщения
         if user_id not in message_ids:
             message_ids[user_id] = []
         message_ids[user_id].append(sent_msg.message_id)
 
-        # Удаляем из списка неотвеченных
         update_unanswered_clients(user_id, is_admin_reply=True)
 
-        # Логируем только текстовые ответы (фото от админа не логируем)
         if reply_text:
             log_message(user_id, f"Ответ админа: {reply_text}", is_admin=True)
 
@@ -457,31 +504,24 @@ async def reply_to_user(message: types.Message):
         await message.reply(error_msg)
 
 
-@dp.message_handler(commands=['start'])
-async def start_handler(message: types.Message):
-    if await check_banned(message.from_user.id):
-        return
-
-    # Сохраняем username пользователя
-    if message.from_user.username:
-        username_to_id[f"@{message.from_user.username}"] = message.from_user.id
-
-    log_message(message.from_user.id, "/start")
-    await message.answer(format_welcome(), reply_markup=main_kb)
-
-
-@dp.message_handler(lambda m: m.text == "⬅️ На главную")
-async def back_to_main(message: types.Message):
+@dp.message_handler(lambda m: m.text == "⬅️ На главную", state="*")
+async def back_to_main(message: types.Message, state: FSMContext):
     if await check_banned(message.from_user.id):
         return
 
     log_message(message.from_user.id, "На главную")
+    await state.finish()
     await message.answer(format_welcome(), reply_markup=main_kb)
 
 
-@dp.message_handler(lambda m: m.text == "📦 Фото со склада")
+@dp.message_handler(lambda m: m.text == "📦 Фото со склада", state="*")
 async def show_photos(message: types.Message, state: FSMContext):
     if await check_banned(message.from_user.id):
+        return
+
+    current_state = await state.get_state()
+    if current_state in [RulesState.waiting_for_accept.state]:
+        await message.answer("Сначала примите правила использования бота", reply_markup=rules_kb)
         return
 
     log_message(message.from_user.id, "Просмотр фото товаров")
@@ -492,7 +532,7 @@ async def show_photos(message: types.Message, state: FSMContext):
     await state.update_data(last_photo_id=None)
 
 
-@dp.callback_query_handler(lambda c: c.data.startswith("photo:"))
+@dp.callback_query_handler(lambda c: c.data.startswith("photo:"), state="*")
 async def send_product_photo(call: types.CallbackQuery, state: FSMContext):
     if await check_banned(call.from_user.id):
         await call.answer("Вы заблокированы", show_alert=True)
@@ -518,9 +558,14 @@ async def send_product_photo(call: types.CallbackQuery, state: FSMContext):
     await call.answer()
 
 
-@dp.message_handler(lambda m: m.text == "🛒 Оформить заказ")
+@dp.message_handler(lambda m: m.text == "🛒 Оформить заказ", state="*")
 async def start_order(message: types.Message):
     if await check_banned(message.from_user.id):
+        return
+
+    current_state = await dp.current_state().get_state()
+    if current_state in [RulesState.waiting_for_accept.state]:
+        await message.answer("Сначала примите правила использования бота", reply_markup=rules_kb)
         return
 
     log_message(message.from_user.id, "Начало оформления заказа")
@@ -653,15 +698,19 @@ async def restart_order(call: types.CallbackQuery, state: FSMContext):
     await call.answer()
 
 
-@dp.message_handler(lambda m: m.text == "📩 Связаться с админом")
+@dp.message_handler(lambda m: m.text == "📩 Связаться с админом", state="*")
 async def contact_admin(message: types.Message):
     if await check_banned(message.from_user.id):
+        return
+
+    current_state = await dp.current_state().get_state()
+    if current_state in [RulesState.waiting_for_accept.state]:
+        await message.answer("Сначала примите правила использования бота", reply_markup=rules_kb)
         return
 
     user_id = message.from_user.id
     username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{user_id}"
 
-    # Сохраняем username пользователя
     if message.from_user.username:
         username_to_id[f"@{message.from_user.username}"] = user_id
 
@@ -672,12 +721,17 @@ async def contact_admin(message: types.Message):
     log_message(user_id, "Запрос связи с админом")
 
 
-@dp.message_handler(content_types=types.ContentTypes.ANY)
+@dp.message_handler(content_types=types.ContentTypes.ANY, state="*")
 async def handle_messages(message: types.Message):
     if message.from_user.id == ADMIN_ID:
         return
 
     if await check_banned(message.from_user.id):
+        return
+
+    current_state = await dp.current_state().get_state()
+    if current_state in [RulesState.waiting_for_accept.state]:
+        await message.answer("Сначала примите правила использования бота", reply_markup=rules_kb)
         return
 
     if message.from_user.id in awaiting_admin_reply:
@@ -714,7 +768,6 @@ async def handle_messages(message: types.Message):
             await message.answer("❌ Поддерживаются только текст и фото")
             return
 
-        # Добавляем пользователя в список неотвеченных
         update_unanswered_clients(user_id)
 
         sent_notification = await message.answer("✅ Сообщение отправлено администратору. Ожидайте ответа.")
