@@ -30,6 +30,7 @@ awaiting_admin_reply = set()
 user_orders = {}
 chat_logs = {}
 message_ids = {}  # user_id: [message_ids]
+unanswered_clients = set()  # Множество пользователей без ответа
 
 # Create directories
 os.makedirs('chat_logs', exist_ok=True)
@@ -184,6 +185,34 @@ async def check_banned(user_id: int):
     if user_id in banned_users:
         return True
     return False
+
+
+def update_unanswered_clients(user_id: int, is_admin_reply: bool = False):
+    """Update list of unanswered clients"""
+    if is_admin_reply:
+        # Если это ответ админа, удаляем пользователя из списка неотвеченных
+        unanswered_clients.discard(user_id)
+    else:
+        # Если это сообщение от пользователя, добавляем его в список неотвеченных
+        unanswered_clients.add(user_id)
+
+
+@dp.message_handler(commands=['клиенты'])
+async def show_unanswered_clients(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    if not unanswered_clients:
+        await message.reply("Нет неотвеченных клиентов.")
+        return
+
+    clients_list = []
+    for user_id in unanswered_clients:
+        username = username_to_id.get(f"@{user_id}", f"ID:{user_id}")
+        clients_list.append(f"👤 {username}")
+
+    response = "📋 Список неотвеченных клиентов:\n\n" + "\n".join(clients_list)
+    await message.reply(response)
 
 
 @dp.message_handler(commands=['фото'])
@@ -384,6 +413,9 @@ async def reply_to_user(message: types.Message):
         if user_id not in message_ids:
             message_ids[user_id] = []
         message_ids[user_id].append(sent_msg.message_id)
+
+        # Удаляем пользователя из списка неотвеченных
+        update_unanswered_clients(user_id, is_admin_reply=True)
 
         await message.reply(f"✅ Ответ отправлен пользователю {target} ({user_id})")
         log_message(user_id, f"Ответ админа ({admin_username}): {reply_text}", is_admin=True)
@@ -616,7 +648,6 @@ async def handle_messages(message: types.Message):
         return
 
     if await check_banned(message.from_user.id):
-        # Заблокированные пользователи не могут ничего делать
         return
 
     if message.from_user.id in awaiting_admin_reply:
@@ -652,6 +683,9 @@ async def handle_messages(message: types.Message):
         else:
             await message.answer("❌ Поддерживаются только текст и фото")
             return
+
+        # Добавляем пользователя в список неотвеченных
+        update_unanswered_clients(user_id)
 
         sent_notification = await message.answer("✅ Сообщение отправлено администратору. Ожидайте ответа.")
         if user_id not in message_ids:
