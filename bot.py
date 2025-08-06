@@ -122,12 +122,12 @@ def log_message(user_id: int, message: str, is_admin: bool = False, is_photo: bo
     if user_id not in chat_logs:
         chat_logs[user_id] = []
 
-    timestamp = datetime.now().strftime("%d.%m.%y %H:%M:%S")
-    username = "admin" if is_admin else f"{username_to_id.get(f'@{user_id}', 'user')}({user_id})"
-
     # Не логируем фото от админа
     if is_admin and is_photo:
         return
+
+    timestamp = datetime.now().strftime("%d.%m.%y %H:%M:%S")
+    username = "admin" if is_admin else f"{username_to_id.get(f'@{user_id}', 'user')}({user_id})"
 
     if is_photo:
         log_entry = f"{timestamp} @{username}: [фото_{message}]"
@@ -387,18 +387,20 @@ async def send_payment(message: types.Message):
     log_message(message.from_user.id, f"/оплата {parts[1]}", is_admin=True)
 
 
-@dp.message_handler(commands=['ответ'])
+@dp.message_handler(commands=['ответ'], content_types=types.ContentTypes.ANY)
 async def reply_to_user(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    parts = message.text.split(maxsplit=2)
-    if len(parts) < 3:
-        await message.reply("❗ Формат: /ответ @username сообщение ИЛИ /ответ user_id сообщение")
+    # Разбиваем сообщение на части
+    parts = message.text.split() if message.text else message.caption.split() if message.caption else []
+
+    if len(parts) < 2:
+        await message.reply("❗ Формат: /ответ @username или /ответ user_id [текст]")
         return
 
     target = parts[1]
-    reply_text = parts[2]
+    reply_text = ' '.join(parts[2:]) if len(parts) > 2 else None
     admin_username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{message.from_user.id}"
 
     user_id, error = await resolve_user(target)
@@ -407,11 +409,23 @@ async def reply_to_user(message: types.Message):
         return
 
     try:
-        # Отправляем ответ пользователю
-        sent_msg = await bot.send_message(
-            user_id,
-            f"📬 Ответ администратора ({admin_username}):\n\n{reply_text}"
-        )
+        # Отправляем контент пользователю
+        if message.photo:
+            # Отправка фото с подписью или без
+            sent_msg = await bot.send_photo(
+                user_id,
+                message.photo[-1].file_id,
+                caption=f"📬 Ответ администратора ({admin_username}):\n\n{reply_text}" if reply_text else None
+            )
+        elif reply_text:
+            # Отправка только текста
+            sent_msg = await bot.send_message(
+                user_id,
+                f"📬 Ответ администратора ({admin_username}):\n\n{reply_text}"
+            )
+        else:
+            await message.reply("❗ Нет контента для отправки (текст или фото)")
+            return
 
         # Сохраняем ID сообщения для возможного удаления
         if user_id not in message_ids:
@@ -422,58 +436,15 @@ async def reply_to_user(message: types.Message):
         update_unanswered_clients(user_id, is_admin_reply=True)
 
         await message.reply(f"✅ Ответ отправлен пользователю {target} ({user_id})")
-        log_message(user_id, f"Ответ админа ({admin_username}): {reply_text}", is_admin=True)
+
+        # Логируем только текстовые ответы админа
+        if reply_text:
+            log_message(user_id, f"Ответ админа ({admin_username}): {reply_text}", is_admin=True)
 
     except Exception as e:
         error_msg = f"❌ Ошибка: {str(e)}"
         if "bot was blocked by the user" in str(e).lower():
             error_msg = "❌ Пользователь заблокировал бота"
-        await message.reply(error_msg)
-
-
-@dp.message_handler(content_types=types.ContentTypes.PHOTO, user_id=ADMIN_ID)
-async def handle_admin_photo(message: types.Message):
-    # Если фото отправлено в ответ на сообщение
-    if message.reply_to_message:
-        # Если это пересланное сообщение от пользователя
-        if message.reply_to_message.forward_from:
-            user_id = message.reply_to_message.forward_from.id
-        # Если это прямое сообщение от бота (например, уведомление о новом сообщении)
-        elif "ID:" in message.reply_to_message.text:
-            try:
-                user_id = int(message.reply_to_message.text.split("ID:")[1].split(")")[0])
-            except:
-                user_id = None
-    else:
-        user_id = None
-
-    if not user_id:
-        await message.reply("Ответьте этим фото на сообщение от пользователя")
-        return
-
-    try:
-        # Отправляем фото пользователю
-        sent_photo = await bot.send_photo(
-            user_id,
-            message.photo[-1].file_id,
-            caption=message.caption if message.caption else None
-        )
-
-        # Сохраняем ID сообщения для возможного удаления
-        if user_id not in message_ids:
-            message_ids[user_id] = []
-        message_ids[user_id].append(sent_photo.message_id)
-
-        # Удаляем пользователя из списка неотвеченных, если он там был
-        update_unanswered_clients(user_id, is_admin_reply=True)
-
-        await message.reply(f"✅ Фото отправлено пользователю (ID:{user_id})")
-
-    except Exception as e:
-        error_msg = f"❌ Ошибка: {str(e)}"
-        if "bot was blocked by the user" in str(e).lower():
-            error_msg = "❌ Пользователь заблокировал бота"
-            unanswered_clients.discard(user_id)
         await message.reply(error_msg)
 
 
