@@ -179,6 +179,13 @@ async def resolve_user(target: str):
         return None, "Некорректный ID пользователя"
 
 
+async def check_banned(user_id: int):
+    """Check if user is banned and respond if needed"""
+    if user_id in banned_users:
+        return True
+    return False
+
+
 @dp.message_handler(commands=['фото'])
 async def send_photo_from_logs(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -390,7 +397,7 @@ async def reply_to_user(message: types.Message):
 
 @dp.message_handler(commands=['start'])
 async def start_handler(message: types.Message):
-    if message.from_user.id in banned_users:
+    if await check_banned(message.from_user.id):
         return
 
     # Сохраняем username пользователя
@@ -403,12 +410,18 @@ async def start_handler(message: types.Message):
 
 @dp.message_handler(lambda m: m.text == "⬅️ На главную")
 async def back_to_main(message: types.Message):
+    if await check_banned(message.from_user.id):
+        return
+
     log_message(message.from_user.id, "На главную")
     await message.answer(format_welcome(), reply_markup=main_kb)
 
 
 @dp.message_handler(lambda m: m.text == "📦 Фото со склада")
 async def show_photos(message: types.Message, state: FSMContext):
+    if await check_banned(message.from_user.id):
+        return
+
     log_message(message.from_user.id, "Просмотр фото товаров")
     kb = InlineKeyboardMarkup()
     for product in PHOTOS:
@@ -419,6 +432,10 @@ async def show_photos(message: types.Message, state: FSMContext):
 
 @dp.callback_query_handler(lambda c: c.data.startswith("photo:"))
 async def send_product_photo(call: types.CallbackQuery, state: FSMContext):
+    if await check_banned(call.from_user.id):
+        await call.answer("Вы заблокированы", show_alert=True)
+        return
+
     product = call.data.split(":")[1]
     photo_path = PHOTOS.get(product)
 
@@ -441,6 +458,9 @@ async def send_product_photo(call: types.CallbackQuery, state: FSMContext):
 
 @dp.message_handler(lambda m: m.text == "🛒 Оформить заказ")
 async def start_order(message: types.Message):
+    if await check_banned(message.from_user.id):
+        return
+
     log_message(message.from_user.id, "Начало оформления заказа")
     kb = InlineKeyboardMarkup()
     for product in PRODUCTS:
@@ -451,6 +471,10 @@ async def start_order(message: types.Message):
 
 @dp.callback_query_handler(lambda c: c.data.startswith("order:"), state=OrderState.waiting_for_product)
 async def choose_quantity(call: types.CallbackQuery, state: FSMContext):
+    if await check_banned(call.from_user.id):
+        await call.answer("Вы заблокированы", show_alert=True)
+        return
+
     product = call.data.split(":")[1]
     await state.update_data(product=product)
     kb = InlineKeyboardMarkup()
@@ -463,6 +487,10 @@ async def choose_quantity(call: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query_handler(lambda c: c.data.startswith("qty:"), state=OrderState.waiting_for_quantity)
 async def choose_quality(call: types.CallbackQuery, state: FSMContext):
+    if await check_banned(call.from_user.id):
+        await call.answer("Вы заблокированы", show_alert=True)
+        return
+
     quantity = int(call.data.split(":")[1])
     await state.update_data(quantity=quantity)
     kb = InlineKeyboardMarkup()
@@ -475,6 +503,10 @@ async def choose_quality(call: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query_handler(lambda c: c.data.startswith("quality:"), state=OrderState.waiting_for_quality)
 async def confirm_order(call: types.CallbackQuery, state: FSMContext):
+    if await check_banned(call.from_user.id):
+        await call.answer("Вы заблокированы", show_alert=True)
+        return
+
     data = await state.get_data()
     quality = call.data.split(":")[1] == "yes"
     product = data['product']
@@ -505,6 +537,10 @@ async def confirm_order(call: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query_handler(lambda c: c.data == "confirm_order", state=OrderState.confirming_order)
 async def process_confirmation(call: types.CallbackQuery, state: FSMContext):
+    if await check_banned(call.from_user.id):
+        await call.answer("Вы заблокированы", show_alert=True)
+        return
+
     await call.message.answer("Укажите город и район для доставки:")
     await OrderState.waiting_for_comment.set()
     await call.answer()
@@ -512,6 +548,9 @@ async def process_confirmation(call: types.CallbackQuery, state: FSMContext):
 
 @dp.message_handler(state=OrderState.waiting_for_comment)
 async def process_comment(message: types.Message, state: FSMContext):
+    if await check_banned(message.from_user.id):
+        return
+
     comment = message.text
     data = await state.get_data()
     user_id = message.from_user.id
@@ -543,6 +582,10 @@ async def process_comment(message: types.Message, state: FSMContext):
 
 @dp.callback_query_handler(lambda c: c.data == "restart_order", state="*")
 async def restart_order(call: types.CallbackQuery, state: FSMContext):
+    if await check_banned(call.from_user.id):
+        await call.answer("Вы заблокированы", show_alert=True)
+        return
+
     await state.finish()
     await start_order(call.message)
     await call.answer()
@@ -550,7 +593,7 @@ async def restart_order(call: types.CallbackQuery, state: FSMContext):
 
 @dp.message_handler(lambda m: m.text == "📩 Связаться с админом")
 async def contact_admin(message: types.Message):
-    if message.from_user.id in banned_users:
+    if await check_banned(message.from_user.id):
         return
 
     user_id = message.from_user.id
@@ -572,11 +615,14 @@ async def handle_messages(message: types.Message):
     if message.from_user.id == ADMIN_ID:
         return
 
+    if await check_banned(message.from_user.id):
+        # Заблокированные пользователи не могут ничего делать
+        return
+
     if message.from_user.id in awaiting_admin_reply:
         user_id = message.from_user.id
         username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{user_id}"
 
-        # Сохраняем ID сообщения для возможного удаления
         if user_id not in message_ids:
             message_ids[user_id] = []
         message_ids[user_id].append(message.message_id)
@@ -607,7 +653,6 @@ async def handle_messages(message: types.Message):
             await message.answer("❌ Поддерживаются только текст и фото")
             return
 
-        # Сохраняем ID сообщения "отправлено админу"
         sent_notification = await message.answer("✅ Сообщение отправлено администратору. Ожидайте ответа.")
         if user_id not in message_ids:
             message_ids[user_id] = []
