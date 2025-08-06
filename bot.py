@@ -415,22 +415,25 @@ async def reply_to_user(message: types.Message):
     try:
         # Формируем текст ответа с пометкой администратора
         admin_reply_prefix = "📬 Ответ администратора:\n\n"
-        reply_content = admin_reply_prefix + (reply_text if reply_text else "")
 
         # Если есть фото
         if message.photo:
             # Отправляем фото с текстом (если есть)
+            photo_caption = admin_reply_prefix + (reply_text if reply_text else "[фото]")
             sent_msg = await bot.send_photo(
                 user_id,
                 message.photo[-1].file_id,
-                caption=reply_content if reply_text else admin_reply_prefix + "[фото]"
+                caption=photo_caption
             )
+            # Отправляем подтверждение админу
+            await message.reply(f"✅ Фото отправлено пользователю {target} ({user_id})")
         # Если нет фото, но есть текст
         elif reply_text:
             sent_msg = await bot.send_message(
                 user_id,
-                reply_content
+                admin_reply_prefix + reply_text
             )
+            await message.reply(f"✅ Ответ отправлен пользователю {target} ({user_id})")
         else:
             await message.reply("❗ Нет контента для отправки (текст или фото)")
             return
@@ -443,13 +446,9 @@ async def reply_to_user(message: types.Message):
         # Удаляем из списка неотвеченных
         update_unanswered_clients(user_id, is_admin_reply=True)
 
-        await message.reply(f"✅ Ответ отправлен пользователю {target} ({user_id})")
-
-        # Логируем ответ
+        # Логируем только текстовые ответы (фото от админа не логируем)
         if reply_text:
             log_message(user_id, f"Ответ админа: {reply_text}", is_admin=True)
-        else:
-            log_message(user_id, "Ответ админа: [фото]", is_admin=True)
 
     except Exception as e:
         error_msg = f"❌ Ошибка: {str(e)}"
