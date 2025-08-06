@@ -431,18 +431,25 @@ async def reply_to_user(message: types.Message):
         await message.reply(error_msg)
 
 
-@dp.message_handler(content_types=types.ContentTypes.PHOTO)
+@dp.message_handler(content_types=types.ContentTypes.PHOTO, user_id=ADMIN_ID)
 async def handle_admin_photo(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
+    # Если фото отправлено в ответ на сообщение
+    if message.reply_to_message:
+        # Если это пересланное сообщение от пользователя
+        if message.reply_to_message.forward_from:
+            user_id = message.reply_to_message.forward_from.id
+        # Если это прямое сообщение от бота (например, уведомление о новом сообщении)
+        elif "ID:" in message.reply_to_message.text:
+            try:
+                user_id = int(message.reply_to_message.text.split("ID:")[1].split(")")[0])
+            except:
+                user_id = None
+    else:
+        user_id = None
 
-    # Получаем последнего пользователя, которому нужно ответить
-    if not unanswered_clients:
-        await message.reply("Нет неотвеченных клиентов для отправки фото.")
+    if not user_id:
+        await message.reply("Ответьте этим фото на сообщение от пользователя")
         return
-
-    user_id = next(iter(unanswered_clients))
-    username = username_to_id.get(f"@{user_id}", f"ID:{user_id}")
 
     try:
         # Отправляем фото пользователю
@@ -457,10 +464,10 @@ async def handle_admin_photo(message: types.Message):
             message_ids[user_id] = []
         message_ids[user_id].append(sent_photo.message_id)
 
-        # Удаляем пользователя из списка неотвеченных
+        # Удаляем пользователя из списка неотвеченных, если он там был
         update_unanswered_clients(user_id, is_admin_reply=True)
 
-        await message.reply(f"✅ Фото отправлено пользователю {username} ({user_id})")
+        await message.reply(f"✅ Фото отправлено пользователю (ID:{user_id})")
 
     except Exception as e:
         error_msg = f"❌ Ошибка: {str(e)}"
