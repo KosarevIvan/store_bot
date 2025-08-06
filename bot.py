@@ -413,19 +413,23 @@ async def reply_to_user(message: types.Message):
         return
 
     try:
+        # Формируем текст ответа с пометкой администратора
+        admin_reply_prefix = "📬 Ответ администратора:\n\n"
+        reply_content = admin_reply_prefix + (reply_text if reply_text else "")
+
         # Если есть фото
         if message.photo:
             # Отправляем фото с текстом (если есть)
             sent_msg = await bot.send_photo(
                 user_id,
                 message.photo[-1].file_id,
-                caption=reply_text if reply_text else None
+                caption=reply_content if reply_text else admin_reply_prefix + "[фото]"
             )
         # Если нет фото, но есть текст
         elif reply_text:
             sent_msg = await bot.send_message(
                 user_id,
-                reply_text
+                reply_content
             )
         else:
             await message.reply("❗ Нет контента для отправки (текст или фото)")
@@ -441,9 +445,11 @@ async def reply_to_user(message: types.Message):
 
         await message.reply(f"✅ Ответ отправлен пользователю {target} ({user_id})")
 
-        # Логируем только текстовые ответы
+        # Логируем ответ
         if reply_text:
             log_message(user_id, f"Ответ админа: {reply_text}", is_admin=True)
+        else:
+            log_message(user_id, "Ответ админа: [фото]", is_admin=True)
 
     except Exception as e:
         error_msg = f"❌ Ошибка: {str(e)}"
